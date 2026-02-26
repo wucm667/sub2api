@@ -20,8 +20,20 @@ function injectPublicSettings(backendUrl: string): Plugin {
           if (response.ok) {
             const data = await response.json()
             if (data.code === 0 && data.data) {
+              // Inject config script
               const script = `<script>window.__APP_CONFIG__=${JSON.stringify(data.data)};</script>`
-              return html.replace('</head>', `${script}\n</head>`)
+              let result = html.replace('</head>', `${script}\n</head>`)
+
+              // Replace favicon with custom logo if set (prevents default logo flash)
+              const siteLogo = data.data.site_logo
+              if (siteLogo) {
+                result = result.replace(
+                  '<link rel="icon" type="image/png" href="/logo.png" />',
+                  `<link rel="icon" type="image/x-icon" href="${siteLogo}" />`
+                )
+              }
+
+              return result
             }
           }
         } catch (e) {

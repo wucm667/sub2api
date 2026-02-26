@@ -10,12 +10,37 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"reflect"
 	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 )
+
+// extractSiteLogo extracts the site_logo field from the settings struct using reflection
+// This avoids tight coupling with the specific struct type returned by GetPublicSettingsForInjection
+func extractSiteLogo(settings any) string {
+	if settings == nil {
+		return ""
+	}
+
+	// Try to access SiteLogo field directly via reflection
+	v := reflect.ValueOf(settings)
+	if v.Kind() == reflect.Ptr {
+		v = v.Elem()
+	}
+	if v.Kind() != reflect.Struct {
+		return ""
+	}
+
+	field := v.FieldByName("SiteLogo")
+	if field.IsValid() && field.Kind() == reflect.String {
+		return field.String()
+	}
+
+	return ""
+}
 
 const (
 	// NonceHTMLPlaceholder is the placeholder for nonce in HTML script tags
@@ -165,7 +190,10 @@ func (s *FrontendServer) serveIndexHTML(c *gin.Context) {
 		return
 	}
 
-	rendered := s.injectSettings(settingsJSON)
+	// Extract site_logo for favicon replacement
+	siteLogo := extractSiteLogo(settings)
+
+	rendered := s.injectSettings(settingsJSON, siteLogo)
 	s.cache.Set(rendered, settingsJSON)
 
 	// Replace nonce placeholder with actual nonce before serving
@@ -180,14 +208,26 @@ func (s *FrontendServer) serveIndexHTML(c *gin.Context) {
 	c.Abort()
 }
 
-func (s *FrontendServer) injectSettings(settingsJSON []byte) []byte {
+func (s *FrontendServer) injectSettings(settingsJSON []byte, siteLogo string) []byte {
+	html := s.baseHTML
+
+	// If custom site logo is set, replace the default favicon in HTML
+	// This prevents the default logo from flashing before JS loads
+	if siteLogo != "" {
+		// Replace <link rel="icon" ... href="/logo.png" /> with custom logo
+		// Match various forms of the favicon link tag
+		faviconPattern := []byte(`<link rel="icon" type="image/png" href="/logo.png" />`)
+		newFavicon := []byte(`<link rel="icon" type="image/x-icon" href="` + siteLogo + `" />`)
+		html = bytes.Replace(html, faviconPattern, newFavicon, 1)
+	}
+
 	// Create the script tag to inject with nonce placeholder
 	// The placeholder will be replaced with actual nonce at request time
 	script := []byte(`<script nonce="` + NonceHTMLPlaceholder + `">window.__APP_CONFIG__=` + string(settingsJSON) + `;</script>`)
 
 	// Inject before </head>
 	headClose := []byte("</head>")
-	return bytes.Replace(s.baseHTML, headClose, append(script, headClose...), 1)
+	return bytes.Replace(html, headClose, append(script, headClose...), 1)
 }
 
 // replaceNoncePlaceholder replaces the nonce placeholder with actual nonce value
