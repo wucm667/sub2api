@@ -254,6 +254,36 @@ func (s *BillingService) initFallbackPricing() {
 		SupportsCacheBreakdown:         false,
 	}
 	s.fallbackPrices["gpt-5.3-codex"] = s.fallbackPrices["gpt-5.1-codex"]
+
+	// MiniMax M2.5
+	s.fallbackPrices["minimax-m2.5"] = &ModelPricing{
+		InputPricePerToken:  0.27e-6, // $0.27 per MTok
+		OutputPricePerToken: 0.95e-6, // $0.95 per MTok
+	}
+
+	// 智谱 GLM-4.7
+	s.fallbackPrices["glm-4.7"] = &ModelPricing{
+		InputPricePerToken:  0.38e-6, // $0.38 per MTok
+		OutputPricePerToken: 1.98e-6, // $1.98 per MTok
+	}
+
+	// 智谱 GLM-5
+	s.fallbackPrices["glm-5"] = &ModelPricing{
+		InputPricePerToken:  0.72e-6, // $0.72 per MTok
+		OutputPricePerToken: 2.30e-6, // $2.30 per MTok
+	}
+
+	// Kimi K2.5
+	s.fallbackPrices["kimi-k2.5"] = &ModelPricing{
+		InputPricePerToken:  0.45e-6, // $0.45 per MTok
+		OutputPricePerToken: 2.20e-6, // $2.20 per MTok
+	}
+
+	// Qwen 3.5 Plus
+	s.fallbackPrices["qwen3.5-plus"] = &ModelPricing{
+		InputPricePerToken:  0.26e-6, // $0.26 per MTok
+		OutputPricePerToken: 1.56e-6, // $1.56 per MTok
+	}
 }
 
 // getFallbackPricing 根据模型系列获取回退价格
@@ -306,6 +336,37 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 			return s.fallbackPrices["gpt-5.1-codex"]
 		case "gpt-5.1":
 			return s.fallbackPrices["gpt-5.1"]
+		}
+	}
+
+	// MiniMax 系列
+	if strings.Contains(modelLower, "minimax") {
+		if strings.Contains(modelLower, "m2.5") || strings.Contains(modelLower, "m2-5") {
+			return s.fallbackPrices["minimax-m2.5"]
+		}
+	}
+
+	// 智谱 GLM 系列
+	if strings.Contains(modelLower, "glm") {
+		if strings.Contains(modelLower, "5") && !strings.Contains(modelLower, "4") && !strings.Contains(modelLower, "3") {
+			return s.fallbackPrices["glm-5"]
+		}
+		if strings.Contains(modelLower, "4.7") || strings.Contains(modelLower, "4-7") {
+			return s.fallbackPrices["glm-4.7"]
+		}
+	}
+
+	// Kimi 系列
+	if strings.Contains(modelLower, "kimi") {
+		if strings.Contains(modelLower, "k2.5") || strings.Contains(modelLower, "k2-5") {
+			return s.fallbackPrices["kimi-k2.5"]
+		}
+	}
+
+	// Qwen 系列
+	if strings.Contains(modelLower, "qwen") {
+		if strings.Contains(modelLower, "3.5-plus") || strings.Contains(modelLower, "3.5_plus") || strings.Contains(modelLower, "3-5-plus") {
+			return s.fallbackPrices["qwen3.5-plus"]
 		}
 	}
 

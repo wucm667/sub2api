@@ -214,7 +214,17 @@ func TestGetFallbackPricing_FamilyMatching(t *testing.T) {
 		{name: "openai gpt5.1 codex max alias", model: "gpt-5.1-codex-max", expectedInput: 1.5e-6},
 		{name: "openai codex mini latest alias", model: "codex-mini-latest", expectedInput: 1.5e-6},
 		{name: "openai unknown no fallback", model: "gpt-unknown-model", expectNilPricing: true},
-		{name: "non supported family", model: "qwen-max", expectNilPricing: true},
+		{name: "minimax m2.5", model: "minimax-m2.5", expectedInput: 0.27e-6},
+		{name: "minimax m2.5 variant", model: "MiniMax-M2.5-latest", expectedInput: 0.27e-6},
+		{name: "glm-5", model: "glm-5", expectedInput: 0.72e-6},
+		{name: "glm-5 variant", model: "GLM-5-0212", expectedInput: 0.72e-6},
+		{name: "glm-4.7", model: "glm-4.7", expectedInput: 0.38e-6},
+		{name: "glm-4.7 alt separator", model: "glm-4-7", expectedInput: 0.38e-6},
+		{name: "kimi k2.5", model: "kimi-k2.5", expectedInput: 0.45e-6},
+		{name: "kimi k2.5 variant", model: "kimi-k2-5-0215", expectedInput: 0.45e-6},
+		{name: "qwen3.5-plus", model: "qwen3.5-plus", expectedInput: 0.26e-6},
+		{name: "qwen3.5-plus variant", model: "qwen3.5-plus-0215", expectedInput: 0.26e-6},
+		{name: "non supported family", model: "llama-3-70b", expectNilPricing: true},
 	}
 
 	for _, tt := range tests {
