@@ -30,7 +30,7 @@
                 {{ t('admin.ops.errorLog.group') }}
               </th>
               <th class="border-b border-gray-200 px-4 py-2.5 text-left text-[11px] font-bold uppercase tracking-wider text-gray-500 dark:border-dark-700 dark:text-dark-400">
-                {{ t('admin.ops.errorLog.user') }}
+                {{ props.errorType === 'upstream' ? t('admin.ops.errorLog.account') : t('admin.ops.errorLog.userOrAccount') }}
               </th>
               <th class="border-b border-gray-200 px-4 py-2.5 text-left text-[11px] font-bold uppercase tracking-wider text-gray-500 dark:border-dark-700 dark:text-dark-400">
                 {{ t('admin.ops.errorLog.status') }}
@@ -293,6 +293,7 @@ interface Props {
   loading: boolean
   page: number
   pageSize: number
+  errorType?: 'request' | 'upstream'
 }
 
 interface Emits {
@@ -301,7 +302,7 @@ interface Emits {
   (e: 'update:pageSize', value: number): void
 }
 
-defineProps<Props>()
+const props = defineProps<Props>()
 const emit = defineEmits<Emits>()
 
 function getStatusClass(code: number): string {

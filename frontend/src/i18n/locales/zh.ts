@@ -3656,6 +3656,7 @@ export default {
         group: '分组',
         user: '用户',
         userId: '用户 ID',
+        userOrAccount: '用户/账号',
         account: '账号',
         accountId: '账号 ID',
         status: '状态码',

@@ -252,6 +252,7 @@ watch(
             :loading="loading"
             :page="page"
             :page-size="pageSize"
+            :error-type="errorType"
             @openErrorDetail="emit('openErrorDetail', $event)"
 
             @update:page="page = $event"
