@@ -82,15 +82,24 @@ func TestOpenAIGatewayServiceForward_DisabledGroupAllowsTextOnlyResponses(t *tes
 func TestOpenAIGatewayServiceForward_CodexImageInjectionRespectsGroupCapability(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
+	// 桥接生效需要：分组允许图片生成、桥接配置打开、请求体里携带显式的图片
+	// 生成信号（这里通过 tool_choice=image_generation 模拟，覆盖 issue #2254）。
+	imageSignalBody := []byte(`{"model":"gpt-5.4","input":"draw","stream":false,"tool_choice":{"type":"image_generation"}}`)
+	plainTextBody := []byte(`{"model":"gpt-5.4","input":"write code","stream":false}`)
+
 	tests := []struct {
 		name          string
 		allowImages   bool
 		bridgeEnabled bool
+		body          []byte
 		wantInjected  bool
 	}{
-		{name: "disabled group skips injection", allowImages: false, bridgeEnabled: true, wantInjected: false},
-		{name: "enabled group skips injection by default", allowImages: true, bridgeEnabled: false, wantInjected: false},
-		{name: "enabled group injects image tool when bridge enabled", allowImages: true, bridgeEnabled: true, wantInjected: true},
+		// 分组关闭图片生成 + 纯文本请求：桥接条件不满足，不注入。
+		{name: "disabled group skips injection for text request", allowImages: false, bridgeEnabled: true, body: plainTextBody, wantInjected: false},
+		// 分组允许 + 桥接关闭：即使带显式信号也不注入。
+		{name: "bridge disabled skips injection even with signal", allowImages: true, bridgeEnabled: false, body: imageSignalBody, wantInjected: false},
+		// 分组允许 + 桥接打开 + 携带显式信号：注入工具与桥接指令。
+		{name: "bridge injects image tool when signal is present", allowImages: true, bridgeEnabled: true, body: imageSignalBody, wantInjected: true},
 	}
 
 	for _, tt := range tests {
@@ -107,7 +116,7 @@ func TestOpenAIGatewayServiceForward_CodexImageInjectionRespectsGroupCapability(
 			c, _ := newOpenAIImageGenerationControlTestContext(tt.allowImages, "codex_cli_rs/0.98.0")
 			account := newOpenAIImageGenerationControlTestAccount()
 
-			result, err := svc.Forward(context.Background(), c, account, []byte(`{"model":"gpt-5.4","input":"write code","stream":false}`))
+			result, err := svc.Forward(context.Background(), c, account, tt.body)
 
 			require.NoError(t, err)
 			require.NotNil(t, result)
@@ -169,7 +178,8 @@ func TestOpenAIGatewayServiceForward_ChannelBridgeOverrideEnablesCodexInjection(
 	c, _ := newOpenAIImageGenerationControlTestContext(true, "codex_cli_rs/0.98.0")
 	account := newOpenAIImageGenerationControlTestAccount()
 
-	result, err := svc.Forward(context.Background(), c, account, []byte(`{"model":"gpt-5.4","input":"write code","stream":false}`))
+	// channel override 打开桥接 + 请求体携带 tool_choice=image_generation 信号。
+	result, err := svc.Forward(context.Background(), c, account, []byte(`{"model":"gpt-5.4","input":"draw","stream":false,"tool_choice":{"type":"image_generation"}}`))
 
 	require.NoError(t, err)
 	require.NotNil(t, result)

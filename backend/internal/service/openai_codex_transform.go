@@ -667,6 +667,49 @@ func normalizeOpenAIResponsesImageGenerationTools(reqBody map[string]any) bool {
 	return modified
 }
 
+// codexImageGenerationBridgeShouldFire reports whether the request carries an
+// explicit image-generation signal. Without such a signal we leave the body
+// alone so that plain Codex coding requests don't get an unwanted
+// image_generation tool injected (issue #2280).
+//
+// Recognized signals:
+//   - tools[] already declares image_generation (user-opted in)
+//   - tool_choice selects image_generation (issue #2254)
+//   - input contains an input_image part (image edit / multi-modal turn)
+//   - input contains a previous image_generation_call item (continuation turn)
+func codexImageGenerationBridgeShouldFire(reqBody map[string]any) bool {
+	if len(reqBody) == 0 {
+		return false
+	}
+	if hasOpenAIImageGenerationTool(reqBody) {
+		return true
+	}
+	if openAIAnyToolChoiceSelectsImageGeneration(reqBody["tool_choice"]) {
+		return true
+	}
+	if hasOpenAIInputImage(reqBody) {
+		return true
+	}
+	return hasOpenAIImageGenerationCallItem(reqBody["input"])
+}
+
+func hasOpenAIImageGenerationCallItem(value any) bool {
+	items, ok := value.([]any)
+	if !ok {
+		return false
+	}
+	for _, raw := range items {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(firstNonEmptyString(item["type"])) == "image_generation_call" {
+			return true
+		}
+	}
+	return false
+}
+
 func ensureOpenAIResponsesImageGenerationTool(reqBody map[string]any) bool {
 	if len(reqBody) == 0 {
 		return false
