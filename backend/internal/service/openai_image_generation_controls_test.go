@@ -129,6 +129,198 @@ func TestOpenAIGatewayServiceForward_CodexImageInjectionRespectsGroupCapability(
 	}
 }
 
+// TestOpenAIGatewayServiceForward_BridgeSkipsTextOnlyCodexRequest 覆盖 issue #2280：
+// VS Code/CLI Codex 客户端发送纯文本编码请求时，即使桥接全局开关已打开，
+// 也不应注入 image_generation 工具或桥接指令，避免模型在用户未请求时自发
+// 调用图片生成工具。
+func TestOpenAIGatewayServiceForward_BridgeSkipsTextOnlyCodexRequest(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	textOnlyBodies := []struct {
+		name string
+		body []byte
+	}{
+		{
+			name: "input string",
+			body: []byte(`{"model":"gpt-5.4","input":"refactor this Go function","stream":false}`),
+		},
+		{
+			name: "input message array without image",
+			body: []byte(`{"model":"gpt-5.4","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"explain this diff"}]}],"stream":false}`),
+		},
+		{
+			name: "with non-image tools",
+			body: []byte(`{"model":"gpt-5.4","input":"run tests","stream":false,"tools":[{"type":"web_search"}]}`),
+		},
+	}
+
+	for _, tt := range textOnlyBodies {
+		t.Run(tt.name, func(t *testing.T) {
+			upstream := &httpUpstreamRecorder{
+				resp: &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(strings.NewReader(`{"id":"resp_text_only","model":"gpt-5.4","usage":{"input_tokens":2,"output_tokens":1}}`)),
+				},
+			}
+			svc := newOpenAIImageGenerationControlTestService(upstream)
+			svc.cfg.Gateway.CodexImageGenerationBridgeEnabled = true
+			c, _ := newOpenAIImageGenerationControlTestContext(true, "codex_cli_rs/0.125.0")
+			account := newOpenAIImageGenerationControlTestAccount()
+
+			result, err := svc.Forward(context.Background(), c, account, tt.body)
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.NotNil(t, upstream.lastReq)
+			require.False(t,
+				gjson.GetBytes(upstream.lastBody, `tools.#(type=="image_generation")`).Exists(),
+				"text-only Codex request must not get image_generation tool injected even when bridge is enabled",
+			)
+			instructions := gjson.GetBytes(upstream.lastBody, "instructions").String()
+			require.NotContains(t, instructions, codexImageGenerationBridgeMarker,
+				"text-only Codex request must not get the image_generation bridge instructions",
+			)
+		})
+	}
+}
+
+// TestOpenAIGatewayServiceForward_BridgeFiresOnImageSignals 覆盖桥接信号的几种
+// 触发路径：tool_choice、显式 tools[] 中的 image_generation、input_image 输入、
+// 历史 image_generation_call 续链项。
+func TestOpenAIGatewayServiceForward_BridgeFiresOnImageSignals(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name string
+		body []byte
+	}{
+		{
+			name: "tool_choice selects image_generation (#2254)",
+			body: []byte(`{"model":"gpt-5.4","input":"draw a sunset","stream":false,"tool_choice":{"type":"image_generation"}}`),
+		},
+		{
+			name: "input contains input_image",
+			body: []byte(`{"model":"gpt-5.4","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"edit this"},{"type":"input_image","image_url":"https://example.com/a.png"}]}],"stream":false}`),
+		},
+		{
+			name: "input continuation has image_generation_call",
+			body: []byte(`{"model":"gpt-5.4","input":[{"type":"image_generation_call","id":"ig_prev","result":"prev"}],"stream":false}`),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			upstream := &httpUpstreamRecorder{
+				resp: &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(strings.NewReader(`{"id":"resp_signal","model":"gpt-5.4","usage":{"input_tokens":2,"output_tokens":1}}`)),
+				},
+			}
+			svc := newOpenAIImageGenerationControlTestService(upstream)
+			svc.cfg.Gateway.CodexImageGenerationBridgeEnabled = true
+			c, _ := newOpenAIImageGenerationControlTestContext(true, "codex_cli_rs/0.125.0")
+			account := newOpenAIImageGenerationControlTestAccount()
+
+			result, err := svc.Forward(context.Background(), c, account, tt.body)
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.NotNil(t, upstream.lastReq)
+			require.True(t,
+				gjson.GetBytes(upstream.lastBody, `tools.#(type=="image_generation")`).Exists(),
+				"image-generation signal must trigger bridge tool injection",
+			)
+			instructions := gjson.GetBytes(upstream.lastBody, "instructions").String()
+			require.Contains(t, instructions, codexImageGenerationBridgeMarker)
+		})
+	}
+}
+
+// TestCodexImageGenerationBridgeShouldFire 单元测试新加的信号识别函数。
+func TestCodexImageGenerationBridgeShouldFire(t *testing.T) {
+	tests := []struct {
+		name string
+		body map[string]any
+		want bool
+	}{
+		{
+			name: "nil body",
+			body: nil,
+			want: false,
+		},
+		{
+			name: "plain text request",
+			body: map[string]any{"model": "gpt-5.4", "input": "write code"},
+			want: false,
+		},
+		{
+			name: "tools contains image_generation",
+			body: map[string]any{
+				"model": "gpt-5.4",
+				"tools": []any{map[string]any{"type": "image_generation"}},
+			},
+			want: true,
+		},
+		{
+			name: "tool_choice selects image_generation",
+			body: map[string]any{
+				"model":       "gpt-5.4",
+				"tool_choice": map[string]any{"type": "image_generation"},
+			},
+			want: true,
+		},
+		{
+			name: "tool_choice string image_generation",
+			body: map[string]any{
+				"model":       "gpt-5.4",
+				"tool_choice": "image_generation",
+			},
+			want: true,
+		},
+		{
+			name: "input_image part",
+			body: map[string]any{
+				"model": "gpt-5.4",
+				"input": []any{
+					map[string]any{
+						"type": "message", "role": "user",
+						"content": []any{
+							map[string]any{"type": "input_image", "image_url": "https://x/a.png"},
+						},
+					},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "image_generation_call continuation item",
+			body: map[string]any{
+				"model": "gpt-5.4",
+				"input": []any{
+					map[string]any{"type": "image_generation_call", "id": "ig_prev"},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "non-image tool only",
+			body: map[string]any{
+				"model": "gpt-5.4",
+				"tools": []any{map[string]any{"type": "web_search"}},
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, codexImageGenerationBridgeShouldFire(tt.body))
+		})
+	}
+}
+
 func TestOpenAIGatewayServiceForward_ExplicitImageToolWorksWithBridgeDisabled(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
