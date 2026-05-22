@@ -89,6 +89,26 @@ const ModelWhitelistSelectorStub = defineComponent({
   `
 })
 
+const GroupSelectorStub = defineComponent({
+  name: 'GroupSelector',
+  props: {
+    modelValue: {
+      type: Array,
+      default: () => []
+    }
+  },
+  emits: ['update:modelValue'],
+  template: `
+    <button
+      type="button"
+      data-testid="assign-group"
+      @click="$emit('update:modelValue', [2])"
+    >
+      assign group
+    </button>
+  `
+})
+
 const SelectStub = defineComponent({
   name: 'SelectStub',
   props: {
@@ -181,7 +201,7 @@ function mountModal(account = buildAccount()) {
         Select: SelectStub,
         Icon: true,
         ProxySelector: true,
-        GroupSelector: true,
+        GroupSelector: GroupSelectorStub,
         ModelWhitelistSelector: ModelWhitelistSelectorStub
       }
     }
@@ -214,6 +234,25 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.model_mapping).toEqual({
       'gpt-5.2': 'gpt-5.2'
     })
+  })
+
+  it('allows group assignment in simple mode without sending rate multiplier', async () => {
+    const account = buildAccount()
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue({ ...account, group_ids: [2] })
+
+    const wrapper = mountModal(account)
+
+    expect(wrapper.get('[data-testid="assign-group"]').exists()).toBe(true)
+    await wrapper.get('[data-testid="assign-group"]').trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    const payload = updateAccountMock.mock.calls[0]?.[1]
+    expect(payload.group_ids).toEqual([2])
+    expect(payload).not.toHaveProperty('rate_multiplier')
   })
 
   it('preserves model mappings when editing the whitelist', async () => {

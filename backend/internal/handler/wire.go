@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/handler/admin"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
@@ -93,6 +94,11 @@ func ProvideAdminSettingHandler(settingService *service.SettingService, emailSer
 	return h
 }
 
+// ProvideAdminGroupHandler creates admin.GroupHandler with run-mode awareness.
+func ProvideAdminGroupHandler(cfg *config.Config, adminService service.AdminService, dashboardService *service.DashboardService, groupCapacityService *service.GroupCapacityService) *admin.GroupHandler {
+	return admin.NewGroupHandlerWithConfig(adminService, dashboardService, groupCapacityService, cfg)
+}
+
 // ProvideHandlers creates the Handlers struct
 func ProvideHandlers(
 	authHandler *AuthHandler,
@@ -156,7 +162,7 @@ var ProviderSet = wire.NewSet(
 	// Admin handlers
 	admin.NewDashboardHandler,
 	admin.NewUserHandler,
-	admin.NewGroupHandler,
+	ProvideAdminGroupHandler,
 	admin.NewAccountHandler,
 	admin.NewAnnouncementHandler,
 	admin.NewDataManagementHandler,

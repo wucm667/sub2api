@@ -19,7 +19,10 @@ type stubAdminService struct {
 	redeems              []service.RedeemCode
 	boundAuthIdentity    *service.AdminBindAuthIdentityInput
 	boundAuthIdentityFor int64
+	createdGroups        []*service.CreateGroupInput
+	updatedGroups        []*service.UpdateGroupInput
 	createdAccounts      []*service.CreateAccountInput
+	updatedAccounts      []*service.UpdateAccountInput
 	createdProxies       []*service.CreateProxyInput
 	updatedProxyIDs      []int64
 	updatedProxies       []*service.UpdateProxyInput
@@ -257,17 +260,34 @@ func (s *stubAdminService) GetAllGroupsByPlatform(ctx context.Context, platform 
 }
 
 func (s *stubAdminService) GetGroup(ctx context.Context, id int64) (*service.Group, error) {
+	for i := range s.groups {
+		if s.groups[i].ID == id {
+			return &s.groups[i], nil
+		}
+	}
 	group := service.Group{ID: id, Name: "group", Status: service.StatusActive}
 	return &group, nil
 }
 
 func (s *stubAdminService) CreateGroup(ctx context.Context, input *service.CreateGroupInput) (*service.Group, error) {
-	group := service.Group{ID: 200, Name: input.Name, Status: service.StatusActive}
+	s.createdGroups = append(s.createdGroups, input)
+	group := service.Group{ID: 200, Name: input.Name, Platform: input.Platform, RateMultiplier: input.RateMultiplier, IsExclusive: input.IsExclusive, SubscriptionType: input.SubscriptionType, DailyLimitUSD: input.DailyLimitUSD, WeeklyLimitUSD: input.WeeklyLimitUSD, MonthlyLimitUSD: input.MonthlyLimitUSD, Status: service.StatusActive}
 	return &group, nil
 }
 
 func (s *stubAdminService) UpdateGroup(ctx context.Context, id int64, input *service.UpdateGroupInput) (*service.Group, error) {
+	s.updatedGroups = append(s.updatedGroups, input)
 	group := service.Group{ID: id, Name: input.Name, Status: service.StatusActive}
+	if input.RateMultiplier != nil {
+		group.RateMultiplier = *input.RateMultiplier
+	}
+	if input.IsExclusive != nil {
+		group.IsExclusive = *input.IsExclusive
+	}
+	group.SubscriptionType = input.SubscriptionType
+	group.DailyLimitUSD = input.DailyLimitUSD
+	group.WeeklyLimitUSD = input.WeeklyLimitUSD
+	group.MonthlyLimitUSD = input.MonthlyLimitUSD
 	return &group, nil
 }
 
@@ -338,6 +358,9 @@ func (s *stubAdminService) CreateAccount(ctx context.Context, input *service.Cre
 }
 
 func (s *stubAdminService) UpdateAccount(ctx context.Context, id int64, input *service.UpdateAccountInput) (*service.Account, error) {
+	s.mu.Lock()
+	s.updatedAccounts = append(s.updatedAccounts, input)
+	s.mu.Unlock()
 	if s.updateAccountErr != nil {
 		return nil, s.updateAccountErr
 	}

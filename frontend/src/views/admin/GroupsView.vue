@@ -36,6 +36,7 @@
               @change="loadGroups"
             />
             <Select
+              v-if="!isSimpleMode"
               v-model="filters.is_exclusive"
               :options="exclusiveOptions"
               :placeholder="t('admin.groups.allGroups')"
@@ -61,6 +62,7 @@
               />
             </button>
             <button
+              v-if="!isSimpleMode"
               @click="openSortModal"
               class="btn btn-secondary"
               :title="t('admin.groups.sortOrder')"
@@ -297,6 +299,7 @@
                 <span class="text-xs">{{ t("common.edit") }}</span>
               </button>
               <button
+                v-if="!isSimpleMode"
                 @click="handleRateMultipliers(row)"
                 class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-purple-600 dark:hover:bg-dark-700 dark:hover:text-purple-400"
               >
@@ -306,6 +309,7 @@
                 }}</span>
               </button>
               <button
+                v-if="!isSimpleMode"
                 @click="handleRPMOverrides(row)"
                 class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-orange-600 dark:hover:bg-dark-700 dark:hover:text-orange-400"
               >
@@ -394,7 +398,7 @@
           <p class="input-hint">{{ t("admin.groups.platformHint") }}</p>
         </div>
         <!-- 从分组复制账号 -->
-        <div v-if="copyAccountsGroupOptions.length > 0">
+        <div v-if="!isSimpleMode && copyAccountsGroupOptions.length > 0">
           <div class="mb-1.5 flex items-center gap-1">
             <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
               {{ t("admin.groups.copyAccounts.title") }}
@@ -482,7 +486,7 @@
           </select>
           <p class="input-hint">{{ t("admin.groups.copyAccounts.hint") }}</p>
         </div>
-        <div>
+        <div v-if="!isSimpleMode">
           <label class="input-label">{{
             t("admin.groups.form.rateMultiplier")
           }}</label>
@@ -497,7 +501,7 @@
           />
           <p class="input-hint">{{ t("admin.groups.rateMultiplierHint") }}</p>
         </div>
-        <div>
+        <div v-if="!isSimpleMode">
           <label class="input-label">{{ t("admin.groups.form.rpmLimit") }}</label>
           <input
             v-model.number="createForm.rpm_limit"
@@ -510,7 +514,7 @@
           <p class="input-hint">{{ t("admin.groups.form.rpmLimitHint") }}</p>
         </div>
         <div
-          v-if="createForm.subscription_type !== 'subscription'"
+          v-if="!isSimpleMode && createForm.subscription_type !== 'subscription'"
           data-tour="group-form-exclusive"
         >
           <div class="mb-1.5 flex items-center gap-1">
@@ -585,7 +589,7 @@
         </div>
 
         <!-- Subscription Configuration -->
-        <div class="mt-4 border-t pt-4">
+        <div v-if="!isSimpleMode" class="mt-4 border-t pt-4">
           <div>
             <label class="input-label">{{
               t("admin.groups.subscription.type")
@@ -649,9 +653,12 @@
         <!-- 图片生成计费配置 -->
         <div
           v-if="
-            createForm.platform === 'antigravity' ||
-            createForm.platform === 'gemini' ||
-            createForm.platform === 'openai'
+            !isSimpleMode &&
+            (
+              createForm.platform === 'antigravity' ||
+              createForm.platform === 'gemini' ||
+              createForm.platform === 'openai'
+            )
           "
           class="border-t pt-4"
         >
@@ -751,7 +758,7 @@
         </div>
 
         <!-- 支持的模型系列（仅 antigravity 平台） -->
-        <div v-if="createForm.platform === 'antigravity'" class="border-t pt-4">
+        <div v-if="!isSimpleMode && createForm.platform === 'antigravity'" class="border-t pt-4">
           <div class="mb-1.5 flex items-center gap-1">
             <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
               {{ t("admin.groups.supportedScopes.title") }}
@@ -825,7 +832,7 @@
         </div>
 
         <!-- MCP XML 协议注入（仅 antigravity 平台） -->
-        <div v-if="createForm.platform === 'antigravity'" class="border-t pt-4">
+        <div v-if="!isSimpleMode && createForm.platform === 'antigravity'" class="border-t pt-4">
           <div class="mb-1.5 flex items-center gap-1">
             <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
               {{ t("admin.groups.mcpXml.title") }}
@@ -882,7 +889,7 @@
         </div>
 
         <!-- Claude Code 客户端限制（仅 anthropic 平台） -->
-        <div v-if="createForm.platform === 'anthropic'" class="border-t pt-4">
+        <div v-if="!isSimpleMode && createForm.platform === 'anthropic'" class="border-t pt-4">
           <div class="mb-1.5 flex items-center gap-1">
             <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
               {{ t("admin.groups.claudeCode.title") }}
@@ -959,7 +966,7 @@
 
         <!-- OpenAI Messages 调度配置（仅 openai 平台） -->
         <div
-          v-if="createForm.platform === 'openai'"
+          v-if="!isSimpleMode && createForm.platform === 'openai'"
           class="border-t border-gray-200 dark:border-dark-400 pt-4 mt-4"
         >
           <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
@@ -1275,6 +1282,7 @@
         <!-- 无效请求兜底（仅 anthropic/antigravity 平台，且非订阅分组） -->
         <div
           v-if="
+            !isSimpleMode &&
             ['anthropic', 'antigravity'].includes(createForm.platform) &&
             createForm.subscription_type !== 'subscription'
           "
@@ -1294,7 +1302,7 @@
         </div>
 
         <!-- 模型路由配置（仅 anthropic 平台） -->
-        <div v-if="createForm.platform === 'anthropic'" class="border-t pt-4">
+        <div v-if="!isSimpleMode && createForm.platform === 'anthropic'" class="border-t pt-4">
           <div class="mb-1.5 flex items-center gap-1">
             <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
               {{ t("admin.groups.modelRouting.title") }}
@@ -1576,7 +1584,7 @@
           <p class="input-hint">{{ t("admin.groups.platformNotEditable") }}</p>
         </div>
         <!-- 从分组复制账号（编辑时） -->
-        <div v-if="copyAccountsGroupOptionsForEdit.length > 0">
+        <div v-if="!isSimpleMode && copyAccountsGroupOptionsForEdit.length > 0">
           <div class="mb-1.5 flex items-center gap-1">
             <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
               {{ t("admin.groups.copyAccounts.title") }}
@@ -1666,7 +1674,7 @@
             {{ t("admin.groups.copyAccounts.hintEdit") }}
           </p>
         </div>
-        <div>
+        <div v-if="!isSimpleMode">
           <label class="input-label">{{
             t("admin.groups.form.rateMultiplier")
           }}</label>
@@ -1680,7 +1688,7 @@
             data-tour="group-form-multiplier"
           />
         </div>
-        <div>
+        <div v-if="!isSimpleMode">
           <label class="input-label">{{ t("admin.groups.form.rpmLimit") }}</label>
           <input
             v-model.number="editForm.rpm_limit"
@@ -1692,7 +1700,7 @@
           />
           <p class="input-hint">{{ t("admin.groups.form.rpmLimitHint") }}</p>
         </div>
-        <div v-if="editForm.subscription_type !== 'subscription'">
+        <div v-if="!isSimpleMode && editForm.subscription_type !== 'subscription'">
           <div class="mb-1.5 flex items-center gap-1">
             <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
               {{ t("admin.groups.form.exclusive") }}
@@ -1763,13 +1771,13 @@
             </span>
           </div>
         </div>
-        <div>
+        <div v-if="!isSimpleMode">
           <label class="input-label">{{ t("admin.groups.form.status") }}</label>
           <Select v-model="editForm.status" :options="editStatusOptions" />
         </div>
 
         <!-- Subscription Configuration -->
-        <div class="mt-4 border-t pt-4">
+        <div v-if="!isSimpleMode" class="mt-4 border-t pt-4">
           <div>
             <label class="input-label">{{
               t("admin.groups.subscription.type")
@@ -1834,9 +1842,12 @@
         <!-- 图片生成计费配置 -->
         <div
           v-if="
-            editForm.platform === 'antigravity' ||
-            editForm.platform === 'gemini' ||
-            editForm.platform === 'openai'
+            !isSimpleMode &&
+            (
+              editForm.platform === 'antigravity' ||
+              editForm.platform === 'gemini' ||
+              editForm.platform === 'openai'
+            )
           "
           class="border-t pt-4"
         >
@@ -1936,7 +1947,7 @@
         </div>
 
         <!-- 支持的模型系列（仅 antigravity 平台） -->
-        <div v-if="editForm.platform === 'antigravity'" class="border-t pt-4">
+        <div v-if="!isSimpleMode && editForm.platform === 'antigravity'" class="border-t pt-4">
           <div class="mb-1.5 flex items-center gap-1">
             <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
               {{ t("admin.groups.supportedScopes.title") }}
@@ -2010,7 +2021,7 @@
         </div>
 
         <!-- MCP XML 协议注入（仅 antigravity 平台） -->
-        <div v-if="editForm.platform === 'antigravity'" class="border-t pt-4">
+        <div v-if="!isSimpleMode && editForm.platform === 'antigravity'" class="border-t pt-4">
           <div class="mb-1.5 flex items-center gap-1">
             <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
               {{ t("admin.groups.mcpXml.title") }}
@@ -2067,7 +2078,7 @@
         </div>
 
         <!-- Claude Code 客户端限制（仅 anthropic 平台） -->
-        <div v-if="editForm.platform === 'anthropic'" class="border-t pt-4">
+        <div v-if="!isSimpleMode && editForm.platform === 'anthropic'" class="border-t pt-4">
           <div class="mb-1.5 flex items-center gap-1">
             <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
               {{ t("admin.groups.claudeCode.title") }}
@@ -2140,7 +2151,7 @@
 
         <!-- OpenAI Messages 调度配置（仅 openai 平台） -->
         <div
-          v-if="editForm.platform === 'openai'"
+          v-if="!isSimpleMode && editForm.platform === 'openai'"
           class="border-t border-gray-200 dark:border-dark-400 pt-4 mt-4"
         >
           <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
@@ -2456,6 +2467,7 @@
         <!-- 无效请求兜底（仅 anthropic/antigravity 平台，且非订阅分组） -->
         <div
           v-if="
+            !isSimpleMode &&
             ['anthropic', 'antigravity'].includes(editForm.platform) &&
             editForm.subscription_type !== 'subscription'
           "
@@ -2475,7 +2487,7 @@
         </div>
 
         <!-- 模型路由配置（仅 anthropic 平台） -->
-        <div v-if="editForm.platform === 'anthropic'" class="border-t pt-4">
+        <div v-if="!isSimpleMode && editForm.platform === 'anthropic'" class="border-t pt-4">
           <div class="mb-1.5 flex items-center gap-1">
             <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
               {{ t("admin.groups.modelRouting.title") }}
@@ -2834,6 +2846,7 @@
 import { ref, reactive, computed, onMounted, onUnmounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "@/stores/app";
+import { useAuthStore } from "@/stores/auth";
 import { useOnboardingStore } from "@/stores/onboarding";
 import { adminAPI } from "@/api/admin";
 import type { AdminGroup, GroupPlatform, SubscriptionType } from "@/types";
@@ -2866,44 +2879,55 @@ import { normalizeSupportedModelScopesForPlatform } from "./groupsSupportedModel
 
 const { t } = useI18n();
 const appStore = useAppStore();
+const authStore = useAuthStore();
 const onboardingStore = useOnboardingStore();
+const isSimpleMode = computed(() => authStore.isSimpleMode);
 
-const columns = computed<Column[]>(() => [
-  { key: "name", label: t("admin.groups.columns.name"), sortable: true },
-  {
-    key: "platform",
-    label: t("admin.groups.columns.platform"),
-    sortable: true,
-  },
-  {
-    key: "billing_type",
-    label: t("admin.groups.columns.billingType"),
-    sortable: true,
-  },
-  {
-    key: "rate_multiplier",
-    label: t("admin.groups.columns.rateMultiplier"),
-    sortable: true,
-  },
-  {
-    key: "is_exclusive",
-    label: t("admin.groups.columns.type"),
-    sortable: true,
-  },
-  {
-    key: "account_count",
-    label: t("admin.groups.columns.accounts"),
-    sortable: true,
-  },
-  {
-    key: "capacity",
-    label: t("admin.groups.columns.capacity"),
-    sortable: false,
-  },
-  { key: "usage", label: t("admin.groups.columns.usage"), sortable: false },
-  { key: "status", label: t("admin.groups.columns.status"), sortable: true },
-  { key: "actions", label: t("admin.groups.columns.actions"), sortable: false },
-]);
+const columns = computed<Column[]>(() => {
+  const base: Column[] = [
+    { key: "name", label: t("admin.groups.columns.name"), sortable: true },
+    {
+      key: "platform",
+      label: t("admin.groups.columns.platform"),
+      sortable: true,
+    },
+  ];
+  if (!isSimpleMode.value) {
+    base.push(
+      {
+        key: "billing_type",
+        label: t("admin.groups.columns.billingType"),
+        sortable: true,
+      },
+      {
+        key: "rate_multiplier",
+        label: t("admin.groups.columns.rateMultiplier"),
+        sortable: true,
+      },
+      {
+        key: "is_exclusive",
+        label: t("admin.groups.columns.type"),
+        sortable: true,
+      },
+      {
+        key: "capacity",
+        label: t("admin.groups.columns.capacity"),
+        sortable: false,
+      },
+      { key: "usage", label: t("admin.groups.columns.usage"), sortable: false },
+    );
+  }
+  base.push(
+    {
+      key: "account_count",
+      label: t("admin.groups.columns.accounts"),
+      sortable: true,
+    },
+    { key: "status", label: t("admin.groups.columns.status"), sortable: true },
+    { key: "actions", label: t("admin.groups.columns.actions"), sortable: false },
+  );
+  return base;
+});
 
 // Filter options
 const statusOptions = computed(() => [
@@ -3522,8 +3546,13 @@ const loadGroups = async () => {
     groups.value = response.items;
     pagination.total = response.total;
     pagination.pages = response.pages;
-    loadUsageSummary();
-    loadCapacitySummary();
+    if (!isSimpleMode.value) {
+      loadUsageSummary();
+      loadCapacitySummary();
+    } else {
+      usageMap.value = new Map();
+      capacityMap.value = new Map();
+    }
   } catch (error: any) {
     if (
       signal.aborted ||
@@ -3686,6 +3715,18 @@ const normalizeImageRateMultiplier = (
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 1;
 };
 
+const buildSimpleCreateGroupPayload = () => ({
+  name: createForm.name,
+  description: createForm.description,
+  platform: createForm.platform,
+});
+
+const buildSimpleUpdateGroupPayload = () => ({
+  name: editForm.name,
+  description: editForm.description,
+  platform: editForm.platform,
+});
+
 const handleCreateGroup = async () => {
   if (!createForm.name.trim()) {
     appStore.showError(t("admin.groups.nameRequired"));
@@ -3693,6 +3734,14 @@ const handleCreateGroup = async () => {
   }
   submitting.value = true;
   try {
+    if (isSimpleMode.value) {
+      await adminAPI.groups.create(buildSimpleCreateGroupPayload());
+      appStore.showSuccess(t("admin.groups.groupCreated"));
+      closeCreateModal();
+      loadGroups();
+      return;
+    }
+
     // 构建请求数据，包含模型路由配置
     const requestData = {
       ...createForm,
@@ -3822,6 +3871,14 @@ const handleUpdateGroup = async () => {
 
   submitting.value = true;
   try {
+    if (isSimpleMode.value) {
+      await adminAPI.groups.update(editingGroup.value.id, buildSimpleUpdateGroupPayload());
+      appStore.showSuccess(t("admin.groups.groupUpdated"));
+      closeEditModal();
+      loadGroups();
+      return;
+    }
+
     // 转换 fallback_group_id: null -> 0 (后端使用 0 表示清除)
     const payload = {
       ...editForm,

@@ -2,6 +2,7 @@
 package routes
 
 import (
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/handler"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 
@@ -13,6 +14,7 @@ func RegisterAdminRoutes(
 	v1 *gin.RouterGroup,
 	h *handler.Handlers,
 	adminAuth middleware.AdminAuthMiddleware,
+	cfg *config.Config,
 ) {
 	admin := v1.Group("/admin")
 	admin.Use(gin.HandlerFunc(adminAuth))
@@ -24,7 +26,7 @@ func RegisterAdminRoutes(
 		registerUserManagementRoutes(admin, h)
 
 		// 分组管理
-		registerGroupRoutes(admin, h)
+		registerGroupRoutes(admin, h, cfg)
 
 		// 账号管理
 		registerAccountRoutes(admin, h)
@@ -66,7 +68,7 @@ func RegisterAdminRoutes(
 		registerSystemRoutes(admin, h)
 
 		// 订阅管理
-		registerSubscriptionRoutes(admin, h)
+		registerSubscriptionRoutes(admin, h, cfg)
 
 		// 使用记录管理
 		registerUsageRoutes(admin, h)
@@ -248,25 +250,26 @@ func registerUserManagementRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	}
 }
 
-func registerGroupRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+func registerGroupRoutes(admin *gin.RouterGroup, h *handler.Handlers, cfg *config.Config) {
 	groups := admin.Group("/groups")
+	simpleModeForbidden := middleware.SimpleModeForbiddenGuard(cfg)
 	{
 		groups.GET("", h.Admin.Group.List)
 		groups.GET("/all", h.Admin.Group.GetAll)
-		groups.GET("/usage-summary", h.Admin.Group.GetUsageSummary)
-		groups.GET("/capacity-summary", h.Admin.Group.GetCapacitySummary)
-		groups.PUT("/sort-order", h.Admin.Group.UpdateSortOrder)
+		groups.GET("/usage-summary", simpleModeForbidden, h.Admin.Group.GetUsageSummary)
+		groups.GET("/capacity-summary", simpleModeForbidden, h.Admin.Group.GetCapacitySummary)
+		groups.PUT("/sort-order", simpleModeForbidden, h.Admin.Group.UpdateSortOrder)
 		groups.GET("/:id", h.Admin.Group.GetByID)
 		groups.POST("", h.Admin.Group.Create)
 		groups.PUT("/:id", h.Admin.Group.Update)
 		groups.DELETE("/:id", h.Admin.Group.Delete)
-		groups.GET("/:id/stats", h.Admin.Group.GetStats)
-		groups.GET("/:id/rate-multipliers", h.Admin.Group.GetGroupRateMultipliers)
-		groups.PUT("/:id/rate-multipliers", h.Admin.Group.BatchSetGroupRateMultipliers)
-		groups.DELETE("/:id/rate-multipliers", h.Admin.Group.ClearGroupRateMultipliers)
-		groups.PUT("/:id/rpm-overrides", h.Admin.Group.BatchSetGroupRPMOverrides)
-		groups.DELETE("/:id/rpm-overrides", h.Admin.Group.ClearGroupRPMOverrides)
-		groups.GET("/:id/api-keys", h.Admin.Group.GetGroupAPIKeys)
+		groups.GET("/:id/stats", simpleModeForbidden, h.Admin.Group.GetStats)
+		groups.GET("/:id/rate-multipliers", simpleModeForbidden, h.Admin.Group.GetGroupRateMultipliers)
+		groups.PUT("/:id/rate-multipliers", simpleModeForbidden, h.Admin.Group.BatchSetGroupRateMultipliers)
+		groups.DELETE("/:id/rate-multipliers", simpleModeForbidden, h.Admin.Group.ClearGroupRateMultipliers)
+		groups.PUT("/:id/rpm-overrides", simpleModeForbidden, h.Admin.Group.BatchSetGroupRPMOverrides)
+		groups.DELETE("/:id/rpm-overrides", simpleModeForbidden, h.Admin.Group.ClearGroupRPMOverrides)
+		groups.GET("/:id/api-keys", simpleModeForbidden, h.Admin.Group.GetGroupAPIKeys)
 	}
 }
 
@@ -507,8 +510,10 @@ func registerSystemRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	}
 }
 
-func registerSubscriptionRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+func registerSubscriptionRoutes(admin *gin.RouterGroup, h *handler.Handlers, cfg *config.Config) {
+	simpleModeForbidden := middleware.SimpleModeForbiddenGuard(cfg)
 	subscriptions := admin.Group("/subscriptions")
+	subscriptions.Use(simpleModeForbidden)
 	{
 		subscriptions.GET("", h.Admin.Subscription.List)
 		subscriptions.GET("/:id", h.Admin.Subscription.GetByID)
@@ -521,10 +526,10 @@ func registerSubscriptionRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	}
 
 	// 分组下的订阅列表
-	admin.GET("/groups/:id/subscriptions", h.Admin.Subscription.ListByGroup)
+	admin.GET("/groups/:id/subscriptions", simpleModeForbidden, h.Admin.Subscription.ListByGroup)
 
 	// 用户下的订阅列表
-	admin.GET("/users/:id/subscriptions", h.Admin.Subscription.ListByUser)
+	admin.GET("/users/:id/subscriptions", simpleModeForbidden, h.Admin.Subscription.ListByUser)
 }
 
 func registerUsageRoutes(admin *gin.RouterGroup, h *handler.Handlers) {

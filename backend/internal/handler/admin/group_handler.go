@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
@@ -20,6 +21,7 @@ type GroupHandler struct {
 	adminService         service.AdminService
 	dashboardService     *service.DashboardService
 	groupCapacityService *service.GroupCapacityService
+	cfg                  *config.Config
 }
 
 type optionalLimitField struct {
@@ -73,11 +75,97 @@ func (f optionalLimitField) ToServiceInput() *float64 {
 
 // NewGroupHandler creates a new admin group handler
 func NewGroupHandler(adminService service.AdminService, dashboardService *service.DashboardService, groupCapacityService *service.GroupCapacityService) *GroupHandler {
+	return NewGroupHandlerWithConfig(adminService, dashboardService, groupCapacityService, nil)
+}
+
+// NewGroupHandlerWithConfig creates a group handler with access to runtime mode.
+func NewGroupHandlerWithConfig(adminService service.AdminService, dashboardService *service.DashboardService, groupCapacityService *service.GroupCapacityService, cfg *config.Config) *GroupHandler {
 	return &GroupHandler{
 		adminService:         adminService,
 		dashboardService:     dashboardService,
 		groupCapacityService: groupCapacityService,
+		cfg:                  cfg,
 	}
+}
+
+func (h *GroupHandler) isSimpleMode() bool {
+	return h != nil && h.cfg != nil && h.cfg.RunMode == config.RunModeSimple
+}
+
+func sanitizeCreateGroupRequestForSimpleMode(req *CreateGroupRequest) {
+	if req == nil {
+		return
+	}
+	req.RateMultiplier = 1
+	req.IsExclusive = false
+	req.SubscriptionType = service.SubscriptionTypeStandard
+	req.DailyLimitUSD = optionalLimitField{}
+	req.WeeklyLimitUSD = optionalLimitField{}
+	req.MonthlyLimitUSD = optionalLimitField{}
+	req.AllowImageGeneration = false
+	req.ImageRateIndependent = false
+	req.ImageRateMultiplier = nil
+	req.ImagePrice1K = nil
+	req.ImagePrice2K = nil
+	req.ImagePrice4K = nil
+	req.ClaudeCodeOnly = false
+	req.FallbackGroupID = nil
+	req.FallbackGroupIDOnInvalidRequest = nil
+	req.ModelRouting = nil
+	req.ModelRoutingEnabled = false
+	req.MCPXMLInject = nil
+	req.SupportedModelScopes = nil
+	req.AllowMessagesDispatch = false
+	req.RequireOAuthOnly = false
+	req.RequirePrivacySet = false
+	req.DefaultMappedModel = ""
+	req.MessagesDispatchModelConfig = service.OpenAIMessagesDispatchModelConfig{}
+	req.RPMLimit = 0
+	req.CopyAccountsFromGroupIDs = nil
+}
+
+func sanitizeUpdateGroupRequestForSimpleMode(req *UpdateGroupRequest) {
+	if req == nil {
+		return
+	}
+	rateMultiplier := 1.0
+	isExclusive := false
+	allowImageGeneration := false
+	imageRateIndependent := false
+	claudeCodeOnly := false
+	modelRoutingEnabled := false
+	allowMessagesDispatch := false
+	requireOAuthOnly := false
+	requirePrivacySet := false
+	rpmLimit := 0
+
+	req.RateMultiplier = &rateMultiplier
+	req.IsExclusive = &isExclusive
+	req.Status = ""
+	req.SubscriptionType = service.SubscriptionTypeStandard
+	req.DailyLimitUSD = optionalLimitField{}
+	req.WeeklyLimitUSD = optionalLimitField{}
+	req.MonthlyLimitUSD = optionalLimitField{}
+	req.AllowImageGeneration = &allowImageGeneration
+	req.ImageRateIndependent = &imageRateIndependent
+	req.ImageRateMultiplier = nil
+	req.ImagePrice1K = nil
+	req.ImagePrice2K = nil
+	req.ImagePrice4K = nil
+	req.ClaudeCodeOnly = &claudeCodeOnly
+	req.FallbackGroupID = nil
+	req.FallbackGroupIDOnInvalidRequest = nil
+	req.ModelRouting = nil
+	req.ModelRoutingEnabled = &modelRoutingEnabled
+	req.MCPXMLInject = nil
+	req.SupportedModelScopes = nil
+	req.AllowMessagesDispatch = &allowMessagesDispatch
+	req.RequireOAuthOnly = &requireOAuthOnly
+	req.RequirePrivacySet = &requirePrivacySet
+	req.DefaultMappedModel = nil
+	req.MessagesDispatchModelConfig = nil
+	req.RPMLimit = &rpmLimit
+	req.CopyAccountsFromGroupIDs = nil
 }
 
 // CreateGroupRequest represents create group request
@@ -246,6 +334,9 @@ func (h *GroupHandler) Create(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
+	if h.isSimpleMode() {
+		sanitizeCreateGroupRequestForSimpleMode(&req)
+	}
 
 	group, err := h.adminService.CreateGroup(c.Request.Context(), &service.CreateGroupInput{
 		Name:                            req.Name,
@@ -300,6 +391,9 @@ func (h *GroupHandler) Update(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
+	if h.isSimpleMode() {
+		sanitizeUpdateGroupRequestForSimpleMode(&req)
+	}
 
 	group, err := h.adminService.UpdateGroup(c.Request.Context(), groupID, &service.UpdateGroupInput{
 		Name:                            req.Name,
@@ -348,6 +442,18 @@ func (h *GroupHandler) Delete(c *gin.Context) {
 	if err != nil {
 		response.BadRequest(c, "Invalid group ID")
 		return
+	}
+
+	if h.isSimpleMode() {
+		group, err := h.adminService.GetGroup(c.Request.Context(), groupID)
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+		if group.AccountCount > 0 {
+			response.BadRequest(c, "Simple mode can only delete empty groups")
+			return
+		}
 	}
 
 	err = h.adminService.DeleteGroup(c.Request.Context(), groupID)

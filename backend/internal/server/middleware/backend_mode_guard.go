@@ -3,6 +3,7 @@ package middleware
 import (
 	"strings"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
@@ -23,6 +24,18 @@ func BackendModeUserGuard(settingService *service.SettingService) gin.HandlerFun
 			return
 		}
 		response.Forbidden(c, "Backend mode is active. User self-service is disabled.")
+		c.Abort()
+	}
+}
+
+// SimpleModeForbiddenGuard blocks SaaS-only admin endpoints in RUN_MODE=simple.
+func SimpleModeForbiddenGuard(cfg *config.Config) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if cfg == nil || cfg.RunMode != config.RunModeSimple {
+			c.Next()
+			return
+		}
+		response.Forbidden(c, "Simple mode does not allow SaaS administration endpoints.")
 		c.Abort()
 	}
 }
