@@ -3201,6 +3201,15 @@ export default {
       failedToDelete: 'Failed to delete account',
       failedToClearRateLimit: 'Failed to clear rate limit',
       deleteConfirm: "Are you sure you want to delete '{name}'? This action cannot be undone.",
+      fields: {
+        codexCliVersion: 'Codex CLI Version',
+        codexCliVersionAdvanced: 'Advanced / Codex CLI Version',
+        codexCliVersionInheritHint:
+          'Leave empty to inherit the global setting; when set, only the codex_cli_rs version segment is rewritten.',
+        codexCliVersionInheritPlaceholder: 'Leave empty to inherit global',
+        codexCliVersionLegacyWarning: 'A full UA field is configured and has highest priority, so this field is ignored.',
+        codexCliVersionInvalid: 'Version must be X.Y.Z, optionally with a prerelease suffix such as -beta.1.'
+      },
       // Create/Edit Account Modal
       platform: 'Platform',
       accountName: 'Account Name',

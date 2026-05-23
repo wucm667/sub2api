@@ -1025,6 +1025,13 @@ func (a *Account) GetOpenAIUserAgent() string {
 	return a.GetCredential("user_agent")
 }
 
+func (a *Account) GetCodexCLIVersion() string {
+	if !a.IsOpenAI() {
+		return ""
+	}
+	return strings.TrimSpace(a.GetCredential("codex_cli_version"))
+}
+
 func (a *Account) GetChatGPTAccountID() string {
 	if !a.IsOpenAIOAuth() {
 		return ""

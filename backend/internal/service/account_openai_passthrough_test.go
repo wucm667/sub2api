@@ -49,6 +49,32 @@ func TestAccount_IsOpenAIPassthroughEnabled(t *testing.T) {
 	})
 }
 
+func TestAccount_GetCodexCLIVersion(t *testing.T) {
+	t.Run("openai account returns trimmed credential", func(t *testing.T) {
+		account := &Account{
+			Platform: PlatformOpenAI,
+			Type:     AccountTypeOAuth,
+			Credentials: map[string]any{
+				"codex_cli_version": " 0.131.0 ",
+			},
+		}
+
+		require.Equal(t, "0.131.0", account.GetCodexCLIVersion())
+	})
+
+	t.Run("non openai account ignores credential", func(t *testing.T) {
+		account := &Account{
+			Platform: PlatformAnthropic,
+			Type:     AccountTypeOAuth,
+			Credentials: map[string]any{
+				"codex_cli_version": "0.131.0",
+			},
+		}
+
+		require.Equal(t, "", account.GetCodexCLIVersion())
+	})
+}
+
 func TestAccount_IsOpenAIOAuthPassthroughEnabled(t *testing.T) {
 	t.Run("仅OAuth类型允许返回开启", func(t *testing.T) {
 		oauthAccount := &Account{

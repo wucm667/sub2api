@@ -1331,6 +1331,57 @@
         </div>
       </div>
 
+      <!-- OpenAI Codex CLI 版本固定 -->
+      <div
+        v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'apikey')"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <button
+          type="button"
+          class="flex w-full items-center justify-between text-left"
+          @click="openAICodexCLIVersionExpanded = !openAICodexCLIVersionExpanded"
+          data-testid="openai-codex-cli-version-toggle"
+        >
+          <div>
+            <label class="input-label mb-0">{{ t('admin.accounts.fields.codexCliVersionAdvanced') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.fields.codexCliVersionInheritHint') }}
+            </p>
+          </div>
+          <Icon
+            name="chevronRight"
+            size="sm"
+            :class="['text-gray-400 transition-transform', openAICodexCLIVersionExpanded ? 'rotate-90' : '']"
+          />
+        </button>
+        <div v-if="openAICodexCLIVersionExpanded" class="mt-3 space-y-2">
+          <input
+            v-model="openAICodexCLIVersion"
+            type="text"
+            :class="[
+              'input max-w-xs font-mono text-sm',
+              isOpenAICodexCLIVersionInvalid ? 'border-red-500 focus:border-red-500 focus:ring-red-500 dark:border-red-500' : ''
+            ]"
+            :placeholder="t('admin.accounts.fields.codexCliVersionInheritPlaceholder')"
+            data-testid="openai-codex-cli-version-input"
+          />
+          <p
+            v-if="hasOpenAILegacyUserAgent"
+            class="text-xs text-amber-600 dark:text-amber-400"
+            data-testid="openai-codex-cli-version-legacy-warning"
+          >
+            {{ t('admin.accounts.fields.codexCliVersionLegacyWarning') }}
+          </p>
+          <p
+            v-if="isOpenAICodexCLIVersionInvalid"
+            class="text-xs text-red-600 dark:text-red-400"
+            data-testid="openai-codex-cli-version-invalid"
+          >
+            {{ t('admin.accounts.fields.codexCliVersionInvalid') }}
+          </p>
+        </div>
+      </div>
+
       <!-- OpenAI Codex 图片生成桥接账号级覆盖 -->
       <div
         v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'apikey')"
@@ -2378,6 +2429,8 @@ const openAIResponsesMode = ref<OpenAIResponsesMode>('auto')
 const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const codexCLIOnlyEnabled = ref(false)
+const openAICodexCLIVersionExpanded = ref(false)
+const openAICodexCLIVersion = ref('')
 type CodexImageGenerationBridgeMode = 'inherit' | 'enabled' | 'disabled'
 const codexImageGenerationBridgeMode = ref<CodexImageGenerationBridgeMode>('inherit')
 const anthropicPassthroughEnabled = ref(false)
@@ -2490,6 +2543,28 @@ const normalizeOpenAIResponsesMode = (mode: unknown): OpenAIResponsesMode => {
 const isOpenAIModelRestrictionDisabled = computed(() =>
   props.account?.platform === 'openai' && openaiPassthroughEnabled.value
 )
+const codexCLIVersionPattern = /^\d+\.\d+\.\d+(-[\w.]+)?$/
+const hasOpenAILegacyUserAgent = computed(() => {
+  const value = (props.account?.credentials as Record<string, unknown> | undefined)?.user_agent
+  return typeof value === 'string' && value.trim() !== ''
+})
+const isOpenAICodexCLIVersionInvalid = computed(() => {
+  const version = openAICodexCLIVersion.value.trim()
+  return version !== '' && !codexCLIVersionPattern.test(version)
+})
+const applyOpenAICodexCLIVersion = (credentials: Record<string, unknown>) => {
+  if (props.account?.platform !== 'openai') {
+    delete credentials.codex_cli_version
+    return
+  }
+
+  const version = openAICodexCLIVersion.value.trim()
+  if (version) {
+    credentials.codex_cli_version = version
+  } else {
+    delete credentials.codex_cli_version
+  }
+}
 const openAIResponsesStatusKey = computed(() => {
   if (openAIResponsesMode.value === 'force_responses') {
     return 'admin.accounts.openai.responsesStatusForcedResponses'
@@ -2670,6 +2745,8 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   openaiOAuthResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
   openaiAPIKeyResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
   codexCLIOnlyEnabled.value = false
+  openAICodexCLIVersionExpanded.value = false
+  openAICodexCLIVersion.value = ''
   codexImageGenerationBridgeMode.value = 'inherit'
   anthropicPassthroughEnabled.value = false
   webSearchEmulationMode.value = 'default'
@@ -2703,6 +2780,9 @@ const syncFormFromAccount = (newAccount: Account | null) => {
       codexCLIOnlyEnabled.value = extra?.codex_cli_only === true
     }
     const credentials = newAccount.credentials as Record<string, unknown> | undefined
+    if (typeof credentials?.codex_cli_version === 'string') {
+      openAICodexCLIVersion.value = credentials.codex_cli_version.trim()
+    }
     const compactMappings = credentials?.compact_model_mapping as Record<string, string> | undefined
     if (compactMappings && typeof compactMappings === 'object') {
       openAICompactModelMappings.value = Object.entries(compactMappings).map(([from, to]) => ({ from, to }))
@@ -3421,6 +3501,7 @@ const handleSubmit = async () => {
         } else {
           delete newCredentials.compact_model_mapping
         }
+        applyOpenAICodexCLIVersion(newCredentials)
       }
 
       // Add pool mode if enabled
@@ -3601,6 +3682,7 @@ const handleSubmit = async () => {
       } else {
         delete newCredentials.compact_model_mapping
       }
+      applyOpenAICodexCLIVersion(newCredentials)
 
       updatePayload.credentials = newCredentials
     }

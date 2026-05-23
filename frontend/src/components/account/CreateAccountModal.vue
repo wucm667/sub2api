@@ -2613,6 +2613,57 @@
         </div>
       </div>
 
+      <!-- OpenAI Codex CLI 版本固定 -->
+      <div
+        v-if="form.platform === 'openai'"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <button
+          type="button"
+          class="flex w-full items-center justify-between text-left"
+          @click="openAICodexCLIVersionExpanded = !openAICodexCLIVersionExpanded"
+          data-testid="openai-codex-cli-version-toggle"
+        >
+          <div>
+            <label class="input-label mb-0">{{ t('admin.accounts.fields.codexCliVersionAdvanced') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.fields.codexCliVersionInheritHint') }}
+            </p>
+          </div>
+          <Icon
+            name="chevronRight"
+            size="sm"
+            :class="['text-gray-400 transition-transform', openAICodexCLIVersionExpanded ? 'rotate-90' : '']"
+          />
+        </button>
+        <div v-if="openAICodexCLIVersionExpanded" class="mt-3 space-y-2">
+          <input
+            v-model="openAICodexCLIVersion"
+            type="text"
+            :class="[
+              'input max-w-xs font-mono text-sm',
+              isOpenAICodexCLIVersionInvalid ? 'border-red-500 focus:border-red-500 focus:ring-red-500 dark:border-red-500' : ''
+            ]"
+            :placeholder="t('admin.accounts.fields.codexCliVersionInheritPlaceholder')"
+            data-testid="openai-codex-cli-version-input"
+          />
+          <p
+            v-if="hasOpenAILegacyUserAgent"
+            class="text-xs text-amber-600 dark:text-amber-400"
+            data-testid="openai-codex-cli-version-legacy-warning"
+          >
+            {{ t('admin.accounts.fields.codexCliVersionLegacyWarning') }}
+          </p>
+          <p
+            v-if="isOpenAICodexCLIVersionInvalid"
+            class="text-xs text-red-600 dark:text-red-400"
+            data-testid="openai-codex-cli-version-invalid"
+          >
+            {{ t('admin.accounts.fields.codexCliVersionInvalid') }}
+          </p>
+        </div>
+      </div>
+
       <!-- OpenAI Compact 能力配置 -->
       <div
         v-if="form.platform === 'openai' && (accountCategory === 'oauth-based' || accountCategory === 'apikey')"
@@ -3310,6 +3361,8 @@ const openAIResponsesMode = ref<OpenAIResponsesMode>('auto')
 const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const codexCLIOnlyEnabled = ref(false)
+const openAICodexCLIVersionExpanded = ref(false)
+const openAICodexCLIVersion = ref('')
 const anthropicPassthroughEnabled = ref(false)
 const webSearchEmulationMode = ref('default')
 const webSearchGlobalEnabled = ref(false)
@@ -3463,6 +3516,30 @@ const openAIWSModeConcurrencyHintKey = computed(() =>
 const isOpenAIModelRestrictionDisabled = computed(() =>
   form.platform === 'openai' && openaiPassthroughEnabled.value
 )
+
+const codexCLIVersionPattern = /^\d+\.\d+\.\d+(-[\w.]+)?$/
+const hasOpenAILegacyUserAgent = computed(() => {
+  const value = form.credentials?.user_agent
+  return typeof value === 'string' && value.trim() !== ''
+})
+const isOpenAICodexCLIVersionInvalid = computed(() => {
+  const version = openAICodexCLIVersion.value.trim()
+  return version !== '' && !codexCLIVersionPattern.test(version)
+})
+
+const applyOpenAICodexCLIVersion = (credentials: Record<string, unknown>) => {
+  if (form.platform !== 'openai') {
+    delete credentials.codex_cli_version
+    return
+  }
+
+  const version = openAICodexCLIVersion.value.trim()
+  if (version) {
+    credentials.codex_cli_version = version
+  } else {
+    delete credentials.codex_cli_version
+  }
+}
 
 const mixedChannelWarningMessageText = computed(() => {
   if (mixedChannelWarningDetails.value) {
@@ -3681,6 +3758,8 @@ watch(
       openaiOAuthResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
       openaiAPIKeyResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
       codexCLIOnlyEnabled.value = false
+      openAICodexCLIVersionExpanded.value = false
+      openAICodexCLIVersion.value = ''
     }
     if (newPlatform !== 'anthropic') {
       anthropicPassthroughEnabled.value = false
@@ -4079,6 +4158,8 @@ const resetForm = () => {
   openaiOAuthResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
   openaiAPIKeyResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
   codexCLIOnlyEnabled.value = false
+  openAICodexCLIVersionExpanded.value = false
+  openAICodexCLIVersion.value = ''
   anthropicPassthroughEnabled.value = false
   webSearchEmulationMode.value = 'default'
   // Reset quota control state
@@ -4454,6 +4535,7 @@ const handleSubmit = async () => {
     if (compactModelMapping) {
       credentials.compact_model_mapping = compactModelMapping
     }
+    applyOpenAICodexCLIVersion(credentials)
   }
 
   // Add pool mode if enabled
@@ -4574,6 +4656,7 @@ const createAccountAndFinish = async (
     } else {
       delete credentials.compact_model_mapping
     }
+    applyOpenAICodexCLIVersion(credentials)
   }
   await doCreateAccount({
     name: form.name,
@@ -4634,6 +4717,7 @@ const handleOpenAIExchange = async (authCode: string) => {
       if (compactModelMapping) {
         credentials.compact_model_mapping = compactModelMapping
       }
+      applyOpenAICodexCLIVersion(credentials)
     }
 
     // 应用临时不可调度配置
@@ -4688,6 +4772,7 @@ const buildOpenAICodexImportCredentialExtras = (): Record<string, unknown> | nul
   if (compactModelMapping) {
     credentials.compact_model_mapping = compactModelMapping
   }
+  applyOpenAICodexCLIVersion(credentials)
 
   if (!applyTempUnschedConfig(credentials)) {
     return null
@@ -4839,6 +4924,7 @@ const handleOpenAIBatchRT = async (refreshTokenInput: string, clientId?: string)
           if (compactModelMapping) {
             credentials.compact_model_mapping = compactModelMapping
           }
+          applyOpenAICodexCLIVersion(credentials)
         }
 
         // Generate account name; fallback to email if name is empty (ent schema requires NotEmpty)

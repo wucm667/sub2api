@@ -331,6 +331,48 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra).not.toHaveProperty('codex_image_generation_bridge_enabled')
   })
 
+  it('submits per-account Codex CLI version override', async () => {
+    const account = buildAccount()
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+
+    await wrapper.get('[data-testid="openai-codex-cli-version-toggle"]').trigger('click')
+    await wrapper.get('[data-testid="openai-codex-cli-version-input"]').setValue('0.131.0')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.codex_cli_version).toBe('0.131.0')
+  })
+
+  it('shows legacy full UA warning for Codex CLI version override', async () => {
+    const account = buildAccount()
+    account.credentials.user_agent = 'codex_cli_rs/0.125.0 (Darwin 14.5.0; arm64) iTerm.app/3.5.0'
+
+    const wrapper = mountModal(account)
+
+    await wrapper.get('[data-testid="openai-codex-cli-version-toggle"]').trigger('click')
+
+    expect(wrapper.get('[data-testid="openai-codex-cli-version-legacy-warning"]').text()).toBe(
+      'admin.accounts.fields.codexCliVersionLegacyWarning'
+    )
+  })
+
+  it('shows a soft validation hint for invalid Codex CLI version override', async () => {
+    const account = buildAccount()
+    const wrapper = mountModal(account)
+
+    await wrapper.get('[data-testid="openai-codex-cli-version-toggle"]').trigger('click')
+    await wrapper.get('[data-testid="openai-codex-cli-version-input"]').setValue('1.2')
+
+    expect(wrapper.get('[data-testid="openai-codex-cli-version-invalid"]').text()).toBe(
+      'admin.accounts.fields.codexCliVersionInvalid'
+    )
+  })
+
   it('allows saving apikey account when backend redacted api_key but credentials_status reports it exists', async () => {
     // 新前端 + 新后端：响应已脱敏，credentials 里没有 api_key，credentials_status.has_api_key=true
     const account = buildAccount()

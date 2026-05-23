@@ -340,6 +340,13 @@ const handleGenerateUrl = async () => {
   }
 }
 
+const preserveOpenAICodexCLIVersion = (credentials: Record<string, unknown>) => {
+  const version = (props.account?.credentials as Record<string, unknown> | undefined)?.codex_cli_version
+  if (typeof version === 'string' && version.trim()) {
+    credentials.codex_cli_version = version.trim()
+  }
+}
+
 const handleExchangeCode = async () => {
   if (!props.account) return
 
@@ -368,6 +375,7 @@ const handleExchangeCode = async () => {
 
     // Build credentials and extra info
     const credentials = oauthClient.buildCredentials(tokenInfo)
+    preserveOpenAICodexCLIVersion(credentials)
     const extra = oauthClient.buildExtraInfo(tokenInfo)
 
     try {

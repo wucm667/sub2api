@@ -3282,6 +3282,14 @@ export default {
         weightHint: '用于负载均衡的权重值',
         statusLabel: '状态'
       },
+      fields: {
+        codexCliVersion: 'Codex CLI 版本',
+        codexCliVersionAdvanced: '高级 / Codex CLI 版本',
+        codexCliVersionInheritHint: '留空继承全局设置；填写后仅改写 codex_cli_rs 的版本号片段。',
+        codexCliVersionInheritPlaceholder: '留空继承全局设置',
+        codexCliVersionLegacyWarning: '已配置完整 UA 字段，优先级最高，本字段无效',
+        codexCliVersionInvalid: '版本号格式应为 X.Y.Z，可附加 -beta.1 这类预发布标记。'
+      },
       filters: {
         platform: '平台',
         allPlatforms: '全部平台',
