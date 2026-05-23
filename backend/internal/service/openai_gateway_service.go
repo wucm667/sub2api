@@ -3243,6 +3243,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 			}
 		}
 	}
+	downstreamUA := req.Header.Get("user-agent")
 
 	// 覆盖入站鉴权残留，并注入上游认证
 	req.Header.Del("authorization")
@@ -3295,10 +3296,12 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 
 	// 透传模式也支持账户自定义 User-Agent 与 ForceCodexCLI 兜底。
 	customUA := account.GetOpenAIUserAgent()
+	hasCustomUA := customUA != ""
 	if customUA != "" {
 		req.Header.Set("user-agent", customUA)
 	}
-	if s.cfg != nil && s.cfg.Gateway.ForceCodexCLI {
+	forceCodexCLI := s.cfg != nil && s.cfg.Gateway.ForceCodexCLI
+	if forceCodexCLI {
 		req.Header.Set("user-agent", codexCLIUserAgent)
 	}
 	// OAuth 安全透传：对非 Codex UA 统一兜底，降低被上游风控拦截概率。
@@ -3309,12 +3312,41 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	// 浏览器型 UA 兜底：仅 OAuth（ChatGPT 内部接口）账号生效，若最终 user-agent 仍为浏览器
 	// （Chrome/Firefox/Safari/Edge 等），替换为后台配置的 Codex UA，避免 Cloudflare 触发 JS 质询。
 	s.overrideBrowserUserAgent(ctx, account, req)
+	s.rewritePassthroughCodexCLIUserAgentVersion(ctx, account, req, downstreamUA, hasCustomUA || forceCodexCLI)
 
 	if req.Header.Get("content-type") == "" {
 		req.Header.Set("content-type", "application/json")
 	}
 
 	return req, nil
+}
+
+func (s *OpenAIGatewayService) rewritePassthroughCodexCLIUserAgentVersion(
+	ctx context.Context,
+	account *Account,
+	req *http.Request,
+	downstreamUA string,
+	skip bool,
+) {
+	if skip || account == nil || req == nil {
+		return
+	}
+
+	targetVersion := account.GetCodexCLIVersion()
+	if targetVersion == "" && s != nil && s.settingService != nil {
+		targetVersion = s.settingService.GetOpenAICodexCLIVersion(ctx)
+	}
+	if targetVersion == "" {
+		return
+	}
+
+	currentUA := req.Header.Get("user-agent")
+	if currentUA != downstreamUA {
+		return
+	}
+	if newUA := rewriteCodexCLIVersion(currentUA, targetVersion); newUA != currentUA {
+		req.Header.Set("user-agent", newUA)
+	}
 }
 
 func shouldFailoverOpenAIPassthroughResponse(statusCode int) bool {

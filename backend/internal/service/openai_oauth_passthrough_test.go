@@ -22,6 +22,41 @@ import (
 
 func f64p(v float64) *float64 { return &v }
 
+type openAICodexCLIVersionRepoStub struct {
+	values map[string]string
+}
+
+func (s *openAICodexCLIVersionRepoStub) Get(ctx context.Context, key string) (*Setting, error) {
+	panic("unexpected Get call")
+}
+
+func (s *openAICodexCLIVersionRepoStub) GetValue(ctx context.Context, key string) (string, error) {
+	if value, ok := s.values[key]; ok {
+		return value, nil
+	}
+	return "", ErrSettingNotFound
+}
+
+func (s *openAICodexCLIVersionRepoStub) Set(ctx context.Context, key, value string) error {
+	panic("unexpected Set call")
+}
+
+func (s *openAICodexCLIVersionRepoStub) GetMultiple(ctx context.Context, keys []string) (map[string]string, error) {
+	panic("unexpected GetMultiple call")
+}
+
+func (s *openAICodexCLIVersionRepoStub) SetMultiple(ctx context.Context, settings map[string]string) error {
+	panic("unexpected SetMultiple call")
+}
+
+func (s *openAICodexCLIVersionRepoStub) GetAll(ctx context.Context) (map[string]string, error) {
+	panic("unexpected GetAll call")
+}
+
+func (s *openAICodexCLIVersionRepoStub) Delete(ctx context.Context, key string) error {
+	panic("unexpected Delete call")
+}
+
 type httpUpstreamRecorder struct {
 	lastReq  *http.Request
 	lastBody []byte
@@ -924,6 +959,157 @@ func TestOpenAIGatewayService_OAuthPassthrough_NonCodexUAFallbackToCodexUA(t *te
 	require.Equal(t, false, gjson.GetBytes(upstream.lastBody, "store").Bool())
 	require.Equal(t, true, gjson.GetBytes(upstream.lastBody, "stream").Bool())
 	require.Equal(t, "codex_cli_rs/0.125.0", upstream.lastReq.Header.Get("User-Agent"))
+}
+
+func TestOpenAIGatewayService_OAuthPassthrough_RewritesCodexCLIVersion(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name           string
+		accountVersion string
+		globalVersion  string
+		wantUA         string
+	}{
+		{
+			name:           "account credential overrides global",
+			accountVersion: "0.131.0",
+			globalVersion:  "0.132.0",
+			wantUA:         "codex_cli_rs/0.131.0 (Darwin 14.5.0; arm64) iTerm.app/3.5.0",
+		},
+		{
+			name:          "global setting applies when account credential is empty",
+			globalVersion: "0.132.0",
+			wantUA:        "codex_cli_rs/0.132.0 (Darwin 14.5.0; arm64) iTerm.app/3.5.0",
+		},
+		{
+			name:   "empty account and global keep downstream version",
+			wantUA: "codex_cli_rs/0.98.0 (Darwin 14.5.0; arm64) iTerm.app/3.5.0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(nil))
+			c.Request.Header.Set("User-Agent", "codex_cli_rs/0.98.0 (Darwin 14.5.0; arm64) iTerm.app/3.5.0")
+
+			inputBody := []byte(`{"model":"gpt-5.2","stream":false,"store":true,"instructions":"local-test-instructions","input":[{"type":"text","text":"hi"}]}`)
+			resp := &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid"}},
+				Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
+			}
+			upstream := &httpUpstreamRecorder{resp: resp}
+
+			settings := map[string]string{}
+			if tt.globalVersion != "" {
+				settings[SettingKeyOpenAICodexCLIVersion] = tt.globalVersion
+			}
+			svc := &OpenAIGatewayService{
+				cfg:            &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
+				httpUpstream:   upstream,
+				settingService: NewSettingService(&openAICodexCLIVersionRepoStub{values: settings}, &config.Config{}),
+			}
+
+			credentials := map[string]any{
+				"access_token":       "oauth-token",
+				"chatgpt_account_id": "chatgpt-acc",
+			}
+			if tt.accountVersion != "" {
+				credentials["codex_cli_version"] = tt.accountVersion
+			}
+			account := &Account{
+				ID:             123,
+				Name:           "acc",
+				Platform:       PlatformOpenAI,
+				Type:           AccountTypeOAuth,
+				Concurrency:    1,
+				Credentials:    credentials,
+				Extra:          map[string]any{"openai_passthrough": true},
+				Status:         StatusActive,
+				Schedulable:    true,
+				RateMultiplier: f64p(1),
+			}
+
+			_, err := svc.Forward(context.Background(), c, account, inputBody)
+			require.NoError(t, err)
+			require.NotNil(t, upstream.lastReq)
+			require.Equal(t, tt.wantUA, upstream.lastReq.Header.Get("User-Agent"))
+		})
+	}
+}
+
+func TestOpenAIGatewayService_OAuthPassthrough_CodexCLIVersionKeepsExistingUAOverrides(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name        string
+		cfg         *config.Config
+		credentials map[string]any
+		wantUA      string
+	}{
+		{
+			name: "full account user agent remains highest priority",
+			cfg:  &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
+			credentials: map[string]any{
+				"access_token":       "oauth-token",
+				"chatgpt_account_id": "chatgpt-acc",
+				"user_agent":         "codex_cli_rs/0.111.0 (Darwin 14.5.0; arm64) iTerm.app/3.5.0",
+				"codex_cli_version":  "0.131.0",
+			},
+			wantUA: "codex_cli_rs/0.111.0 (Darwin 14.5.0; arm64) iTerm.app/3.5.0",
+		},
+		{
+			name: "force codex cli remains unchanged",
+			cfg:  &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: true}},
+			credentials: map[string]any{
+				"access_token":       "oauth-token",
+				"chatgpt_account_id": "chatgpt-acc",
+			},
+			wantUA: codexCLIUserAgent,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(nil))
+			c.Request.Header.Set("User-Agent", "codex_cli_rs/0.98.0 (Darwin 14.5.0; arm64) iTerm.app/3.5.0")
+
+			inputBody := []byte(`{"model":"gpt-5.2","stream":false,"store":true,"instructions":"local-test-instructions","input":[{"type":"text","text":"hi"}]}`)
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid"}},
+				Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
+			}}
+			svc := &OpenAIGatewayService{
+				cfg:          tt.cfg,
+				httpUpstream: upstream,
+				settingService: NewSettingService(&openAICodexCLIVersionRepoStub{values: map[string]string{
+					SettingKeyOpenAICodexCLIVersion: "0.132.0",
+				}}, &config.Config{}),
+			}
+			account := &Account{
+				ID:             123,
+				Name:           "acc",
+				Platform:       PlatformOpenAI,
+				Type:           AccountTypeOAuth,
+				Concurrency:    1,
+				Credentials:    tt.credentials,
+				Extra:          map[string]any{"openai_passthrough": true},
+				Status:         StatusActive,
+				Schedulable:    true,
+				RateMultiplier: f64p(1),
+			}
+
+			_, err := svc.Forward(context.Background(), c, account, inputBody)
+			require.NoError(t, err)
+			require.NotNil(t, upstream.lastReq)
+			require.Equal(t, tt.wantUA, upstream.lastReq.Header.Get("User-Agent"))
+		})
+	}
 }
 
 func TestOpenAIGatewayService_CodexCLIOnly_RejectsNonCodexClient(t *testing.T) {
