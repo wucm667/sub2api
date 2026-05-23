@@ -833,9 +833,10 @@ func TestAPIContracts(t *testing.T) {
 					"payment_visible_method_wxpay_source": "official_wxpay",
 					"payment_visible_method_alipay_enabled": true,
 					"payment_visible_method_wxpay_enabled": false,
-					"openai_advanced_scheduler_enabled": true,
-					"openai_codex_user_agent":           "",
-					"openai_fast_policy_settings": {
+						"openai_advanced_scheduler_enabled": true,
+						"openai_codex_user_agent":           "",
+						"openai_codex_cli_version":          "",
+						"openai_fast_policy_settings": {
 						"rules": []
 					},
 					"custom_menu_items": [],
@@ -1061,9 +1062,10 @@ func TestAPIContracts(t *testing.T) {
 					"payment_visible_method_wxpay_source": "",
 					"payment_visible_method_alipay_enabled": false,
 					"payment_visible_method_wxpay_enabled": false,
-					"openai_advanced_scheduler_enabled": false,
-					"openai_codex_user_agent":           "",
-					"openai_fast_policy_settings": {
+						"openai_advanced_scheduler_enabled": false,
+						"openai_codex_user_agent":           "",
+						"openai_codex_cli_version":          "",
+						"openai_fast_policy_settings": {
 						"rules": []
 					},
 					"payment_enabled": false,

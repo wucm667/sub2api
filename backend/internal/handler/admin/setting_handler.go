@@ -24,6 +24,9 @@ import (
 // semverPattern 预编译 semver 格式校验正则
 var semverPattern = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
 
+// codexCLIVersionPattern validates Codex CLI semver, including prerelease tags.
+var codexCLIVersionPattern = regexp.MustCompile(`^\d+\.\d+\.\d+(-[\w.]+)?$`)
+
 // menuItemIDPattern validates custom menu item IDs: alphanumeric, hyphens, underscores only.
 var menuItemIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
@@ -256,6 +259,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		RewriteMessageCacheControl:             settings.RewriteMessageCacheControl,
 		AntigravityUserAgentVersion:            settings.AntigravityUserAgentVersion,
 		OpenAICodexUserAgent:                   settings.OpenAICodexUserAgent,
+		OpenAICodexCLIVersion:                  settings.OpenAICodexCLIVersion,
 		WebSearchEmulationEnabled:              settings.WebSearchEmulationEnabled,
 		PaymentVisibleMethodAlipaySource:       settings.PaymentVisibleMethodAlipaySource,
 		PaymentVisibleMethodWxpaySource:        settings.PaymentVisibleMethodWxpaySource,
@@ -577,6 +581,7 @@ type UpdateSettingsRequest struct {
 	RewriteMessageCacheControl         *bool   `json:"rewrite_message_cache_control"`
 	AntigravityUserAgentVersion        *string `json:"antigravity_user_agent_version"`
 	OpenAICodexUserAgent               *string `json:"openai_codex_user_agent"`
+	OpenAICodexCLIVersion              *string `json:"openai_codex_cli_version"`
 
 	// Payment visible method routing
 	PaymentVisibleMethodAlipaySource  *string `json:"payment_visible_method_alipay_source"`
@@ -1428,6 +1433,14 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			return
 		}
 	}
+	if req.OpenAICodexCLIVersion != nil {
+		normalized := strings.TrimSpace(*req.OpenAICodexCLIVersion)
+		req.OpenAICodexCLIVersion = &normalized
+		if normalized != "" && !codexCLIVersionPattern.MatchString(normalized) {
+			response.Error(c, http.StatusBadRequest, "openai_codex_cli_version must be empty or a valid semver (e.g. 0.131.0)")
+			return
+		}
+	}
 
 	// 交叉验证：如果同时设置了最低和最高版本号，最高版本号必须 >= 最低版本号
 	if req.MinClaudeCodeVersion != "" && req.MaxClaudeCodeVersion != "" {
@@ -1632,6 +1645,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 				return *req.OpenAICodexUserAgent
 			}
 			return previousSettings.OpenAICodexUserAgent
+		}(),
+		OpenAICodexCLIVersion: func() string {
+			if req.OpenAICodexCLIVersion != nil {
+				return *req.OpenAICodexCLIVersion
+			}
+			return previousSettings.OpenAICodexCLIVersion
 		}(),
 		PaymentVisibleMethodAlipaySource: func() string {
 			if req.PaymentVisibleMethodAlipaySource != nil {
@@ -2000,6 +2019,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		RewriteMessageCacheControl:             updatedSettings.RewriteMessageCacheControl,
 		AntigravityUserAgentVersion:            updatedSettings.AntigravityUserAgentVersion,
 		OpenAICodexUserAgent:                   updatedSettings.OpenAICodexUserAgent,
+		OpenAICodexCLIVersion:                  updatedSettings.OpenAICodexCLIVersion,
 		PaymentVisibleMethodAlipaySource:       updatedSettings.PaymentVisibleMethodAlipaySource,
 		PaymentVisibleMethodWxpaySource:        updatedSettings.PaymentVisibleMethodWxpaySource,
 		PaymentVisibleMethodAlipayEnabled:      updatedSettings.PaymentVisibleMethodAlipayEnabled,
@@ -2461,6 +2481,9 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.OpenAICodexUserAgent != after.OpenAICodexUserAgent {
 		changed = append(changed, "openai_codex_user_agent")
+	}
+	if before.OpenAICodexCLIVersion != after.OpenAICodexCLIVersion {
+		changed = append(changed, "openai_codex_cli_version")
 	}
 	if before.PaymentVisibleMethodAlipaySource != after.PaymentVisibleMethodAlipaySource {
 		changed = append(changed, "payment_visible_method_alipay_source")

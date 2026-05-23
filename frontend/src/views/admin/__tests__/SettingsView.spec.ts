@@ -372,6 +372,7 @@ const baseSettingsResponse = {
   rewrite_message_cache_control: false,
   antigravity_user_agent_version: "",
   openai_codex_user_agent: "",
+  openai_codex_cli_version: "",
   payment_enabled: true,
   payment_min_amount: 1,
   payment_max_amount: 10000,
@@ -643,6 +644,43 @@ describe("admin SettingsView payment visible method controls", () => {
         antigravity_user_agent_version: "1.23.2",
       }),
     );
+  });
+
+  it("reads and submits OpenAI Codex CLI version gateway setting", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      openai_codex_cli_version: "0.131.0",
+    });
+
+    const wrapper = mountView();
+
+    await flushPromises();
+    const input = wrapper.get<HTMLInputElement>(
+      '[data-testid="openai-codex-cli-version-input"]',
+    );
+    expect(input.element.value).toBe("0.131.0");
+
+    await input.setValue("0.132.0-beta.1");
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledTimes(1);
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        openai_codex_cli_version: "0.132.0-beta.1",
+      }),
+    );
+  });
+
+  it("shows a soft validation hint for invalid OpenAI Codex CLI versions", async () => {
+    const wrapper = mountView();
+
+    await flushPromises();
+    await wrapper
+      .get('[data-testid="openai-codex-cli-version-input"]')
+      .setValue("1.2");
+
+    expect(wrapper.get('[data-testid="openai-codex-cli-version-invalid"]').exists()).toBe(true);
   });
 
   it("updates provider enablement immediately and reloads providers", async () => {

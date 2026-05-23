@@ -183,6 +183,7 @@ type SystemSettings struct {
 	RewriteMessageCacheControl         bool   `json:"rewrite_message_cache_control"`
 	AntigravityUserAgentVersion        string `json:"antigravity_user_agent_version"`
 	OpenAICodexUserAgent               string `json:"openai_codex_user_agent"`
+	OpenAICodexCLIVersion              string `json:"openai_codex_cli_version"`
 
 	// Web Search Emulation
 	WebSearchEmulationEnabled bool `json:"web_search_emulation_enabled"`

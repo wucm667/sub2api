@@ -407,6 +407,8 @@ const (
 	// 当客户端 UA 被识别为浏览器（Chrome/Firefox/Safari/Edge 等）时，转发给 OpenAI 上游前会替换为此值，
 	// 用于避免 Cloudflare 对浏览器型 UA 的质询拦截。
 	SettingKeyOpenAICodexUserAgent = "openai_codex_user_agent"
+	// SettingKeyOpenAICodexCLIVersion OpenAI Codex CLI 版本号（空值透传下游 UA 原版本）
+	SettingKeyOpenAICodexCLIVersion = "openai_codex_cli_version"
 
 	// 余额不足提醒
 	SettingKeyBalanceLowNotifyEnabled     = "balance_low_notify_enabled"      // 全局开关

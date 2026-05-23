@@ -437,6 +437,62 @@ func TestSettingHandler_UpdateSettings_RejectsInvalidPaymentVisibleMethodSource(
 	require.NotContains(t, repo.values, service.SettingPaymentVisibleMethodAlipaySource)
 }
 
+func TestSettingHandler_UpdateSettings_OpenAICodexCLIVersion(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name       string
+		value      string
+		wantStatus int
+		wantStored string
+	}{
+		{name: "valid semver", value: "0.131.0", wantStatus: http.StatusOK, wantStored: "0.131.0"},
+		{name: "valid prerelease", value: "0.131.0-beta.1", wantStatus: http.StatusOK, wantStored: "0.131.0-beta.1"},
+		{name: "empty clears setting", value: "", wantStatus: http.StatusOK, wantStored: ""},
+		{name: "invalid text", value: "abc", wantStatus: http.StatusBadRequest},
+		{name: "missing patch segment", value: "1.2", wantStatus: http.StatusBadRequest},
+		{name: "too many segments", value: "1.2.3.4", wantStatus: http.StatusBadRequest},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &settingHandlerRepoStub{
+				values: map[string]string{
+					service.SettingKeyPromoCodeEnabled: "true",
+				},
+			}
+			svc := service.NewSettingService(repo, &config.Config{Default: config.DefaultConfig{UserConcurrency: 5}})
+			handler := NewSettingHandler(svc, nil, nil, nil, nil, nil, nil)
+
+			body := map[string]any{
+				"promo_code_enabled":       true,
+				"openai_codex_cli_version": tt.value,
+			}
+			rawBody, err := json.Marshal(body)
+			require.NoError(t, err)
+
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPut, "/api/v1/admin/settings", bytes.NewReader(rawBody))
+			c.Request.Header.Set("Content-Type", "application/json")
+
+			handler.UpdateSettings(c)
+
+			require.Equal(t, tt.wantStatus, rec.Code)
+			if tt.wantStatus == http.StatusOK {
+				require.Equal(t, tt.wantStored, repo.values[service.SettingKeyOpenAICodexCLIVersion])
+				var resp response.Response
+				require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+				data, ok := resp.Data.(map[string]any)
+				require.True(t, ok)
+				require.Equal(t, tt.wantStored, data["openai_codex_cli_version"])
+			} else {
+				require.NotContains(t, repo.values, service.SettingKeyOpenAICodexCLIVersion)
+			}
+		})
+	}
+}
+
 func TestSettingHandler_UpdateSettings_DoesNotPersistPartialSystemSettingsWhenAuthSourceDefaultsFail(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	repo := &failingAuthSourceSettingsRepoStub{

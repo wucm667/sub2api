@@ -506,6 +506,7 @@ export interface SystemSettings {
   rewrite_message_cache_control: boolean;
   antigravity_user_agent_version: string;
   openai_codex_user_agent: string;
+  openai_codex_cli_version: string;
   web_search_emulation_enabled?: boolean;
 
   // Payment configuration
@@ -729,6 +730,7 @@ export interface UpdateSettingsRequest {
   rewrite_message_cache_control?: boolean;
   antigravity_user_agent_version?: string;
   openai_codex_user_agent?: string;
+  openai_codex_cli_version?: string;
   // Payment configuration
   payment_enabled?: boolean;
   risk_control_enabled?: boolean;

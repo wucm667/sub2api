@@ -50,7 +50,8 @@ func (s *settingUpdateRepoStub) Delete(ctx context.Context, key string) error {
 }
 
 type settingAntigravityUARepoStub struct {
-	values map[string]string
+	values        map[string]string
+	getValueCalls map[string]int
 }
 
 func (s *settingAntigravityUARepoStub) Get(ctx context.Context, key string) (*Setting, error) {
@@ -58,6 +59,10 @@ func (s *settingAntigravityUARepoStub) Get(ctx context.Context, key string) (*Se
 }
 
 func (s *settingAntigravityUARepoStub) GetValue(ctx context.Context, key string) (string, error) {
+	if s.getValueCalls == nil {
+		s.getValueCalls = map[string]int{}
+	}
+	s.getValueCalls[key]++
 	if value, ok := s.values[key]; ok {
 		return value, nil
 	}
@@ -290,6 +295,17 @@ func TestSettingService_UpdateSettings_AntigravityUserAgentVersion(t *testing.T)
 	require.Equal(t, "1.23.2", repo.updates[SettingKeyAntigravityUserAgentVersion])
 }
 
+func TestSettingService_UpdateSettings_OpenAICodexCLIVersion(t *testing.T) {
+	repo := &settingUpdateRepoStub{}
+	svc := NewSettingService(repo, &config.Config{})
+
+	err := svc.UpdateSettings(context.Background(), &SystemSettings{
+		OpenAICodexCLIVersion: " 0.131.0-beta.1 ",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "0.131.0-beta.1", repo.updates[SettingKeyOpenAICodexCLIVersion])
+}
+
 func TestSettingService_UpdateSettings_APIKeyACLTrustForwardedIPRefreshesConfig(t *testing.T) {
 	repo := &settingUpdateRepoStub{}
 	cfg := &config.Config{}
@@ -335,6 +351,34 @@ func TestSettingService_GetAntigravityUserAgentVersion_Precedence(t *testing.T) 
 		svc := NewSettingService(&settingAntigravityUARepoStub{values: map[string]string{}}, &config.Config{})
 
 		require.Equal(t, antigravity.GetDefaultUserAgentVersion(), svc.GetAntigravityUserAgentVersion(context.Background()))
+	})
+}
+
+func TestSettingService_GetOpenAICodexCLIVersion(t *testing.T) {
+	t.Run("database value is cached", func(t *testing.T) {
+		repo := &settingAntigravityUARepoStub{values: map[string]string{
+			SettingKeyOpenAICodexCLIVersion: " 0.131.0 ",
+		}}
+		svc := NewSettingService(repo, &config.Config{})
+
+		require.Equal(t, "0.131.0", svc.GetOpenAICodexCLIVersion(context.Background()))
+		repo.values[SettingKeyOpenAICodexCLIVersion] = "0.132.0"
+		require.Equal(t, "0.131.0", svc.GetOpenAICodexCLIVersion(context.Background()))
+		require.Equal(t, 1, repo.getValueCalls[SettingKeyOpenAICodexCLIVersion])
+	})
+
+	t.Run("missing value falls back to passthrough", func(t *testing.T) {
+		svc := NewSettingService(&settingAntigravityUARepoStub{values: map[string]string{}}, &config.Config{})
+
+		require.Equal(t, "", svc.GetOpenAICodexCLIVersion(context.Background()))
+	})
+
+	t.Run("invalid value falls back to passthrough", func(t *testing.T) {
+		svc := NewSettingService(&settingAntigravityUARepoStub{values: map[string]string{
+			SettingKeyOpenAICodexCLIVersion: "1.2.3.4",
+		}}, &config.Config{})
+
+		require.Equal(t, "", svc.GetOpenAICodexCLIVersion(context.Background()))
 	})
 }
 

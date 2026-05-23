@@ -141,6 +141,16 @@ const openAICodexUserAgentCacheTTL = 60 * time.Second
 const openAICodexUserAgentErrorTTL = 5 * time.Second
 const openAICodexUserAgentDBTimeout = 5 * time.Second
 
+// cachedOpenAICodexCLIVersion 缓存 OpenAI Codex CLI 版本号（进程内缓存，60s TTL）
+type cachedOpenAICodexCLIVersion struct {
+	value     string
+	expiresAt int64 // unix nano
+}
+
+const openAICodexCLIVersionCacheTTL = 60 * time.Second
+const openAICodexCLIVersionErrorTTL = 5 * time.Second
+const openAICodexCLIVersionDBTimeout = 5 * time.Second
+
 // DefaultSubscriptionGroupReader validates group references used by default subscriptions.
 type DefaultSubscriptionGroupReader interface {
 	GetByID(ctx context.Context, id int64) (*Group, error)
@@ -152,17 +162,19 @@ type WebSearchManagerBuilder func(cfg *WebSearchEmulationConfig, proxyURLs map[i
 
 // SettingService 系统设置服务
 type SettingService struct {
-	settingRepo               SettingRepository
-	defaultSubGroupReader     DefaultSubscriptionGroupReader
-	proxyRepo                 ProxyRepository // for resolving websearch provider proxy URLs
-	cfg                       *config.Config
-	onUpdate                  func() // Callback when settings are updated (for cache invalidation)
-	version                   string // Application version
-	webSearchManagerBuilder   WebSearchManagerBuilder
-	antigravityUAVersionCache atomic.Value // *cachedAntigravityUserAgentVersion
-	antigravityUAVersionSF    singleflight.Group
-	openAICodexUACache        atomic.Value // *cachedOpenAICodexUserAgent
-	openAICodexUASF           singleflight.Group
+	settingRepo                SettingRepository
+	defaultSubGroupReader      DefaultSubscriptionGroupReader
+	proxyRepo                  ProxyRepository // for resolving websearch provider proxy URLs
+	cfg                        *config.Config
+	onUpdate                   func() // Callback when settings are updated (for cache invalidation)
+	version                    string // Application version
+	webSearchManagerBuilder    WebSearchManagerBuilder
+	antigravityUAVersionCache  atomic.Value // *cachedAntigravityUserAgentVersion
+	antigravityUAVersionSF     singleflight.Group
+	openAICodexUACache         atomic.Value // *cachedOpenAICodexUserAgent
+	openAICodexUASF            singleflight.Group
+	openAICodexCLIVersionCache atomic.Value // *cachedOpenAICodexCLIVersion
+	openAICodexCLIVersionSF    singleflight.Group
 }
 
 type ProviderDefaultGrantSettings struct {
@@ -989,6 +1001,55 @@ func (s *SettingService) GetOpenAICodexUserAgent(ctx context.Context) string {
 	return fallback
 }
 
+// GetOpenAICodexCLIVersion 返回 OpenAI Codex CLI 版本号固定值。
+// 空值、缺失或非法值均返回空字符串，表示完全透传下游 User-Agent 原版本。
+func (s *SettingService) GetOpenAICodexCLIVersion(ctx context.Context) string {
+	if s == nil || s.settingRepo == nil {
+		return ""
+	}
+	if cached, ok := s.openAICodexCLIVersionCache.Load().(*cachedOpenAICodexCLIVersion); ok && cached != nil {
+		if time.Now().UnixNano() < cached.expiresAt {
+			return cached.value
+		}
+	}
+
+	result, _, _ := s.openAICodexCLIVersionSF.Do("openai_codex_cli_version", func() (any, error) {
+		if cached, ok := s.openAICodexCLIVersionCache.Load().(*cachedOpenAICodexCLIVersion); ok && cached != nil {
+			if time.Now().UnixNano() < cached.expiresAt {
+				return cached.value, nil
+			}
+		}
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), openAICodexCLIVersionDBTimeout)
+		defer cancel()
+		value, err := s.settingRepo.GetValue(dbCtx, SettingKeyOpenAICodexCLIVersion)
+		if err != nil && !errors.Is(err, ErrSettingNotFound) {
+			slog.Warn("failed to get openai codex cli version setting", "error", err)
+			s.openAICodexCLIVersionCache.Store(&cachedOpenAICodexCLIVersion{
+				value:     "",
+				expiresAt: time.Now().Add(openAICodexCLIVersionErrorTTL).UnixNano(),
+			})
+			return "", nil
+		}
+		version := strings.TrimSpace(value)
+		if version != "" && !codexCLITargetVersionRe.MatchString(version) {
+			slog.Warn("invalid openai codex cli version setting", "version", version)
+			version = ""
+		}
+		s.openAICodexCLIVersionCache.Store(&cachedOpenAICodexCLIVersion{
+			value:     version,
+			expiresAt: time.Now().Add(openAICodexCLIVersionCacheTTL).UnixNano(),
+		})
+		return version, nil
+	})
+	if version, ok := result.(string); ok {
+		return version
+	}
+	return ""
+}
+
 // SetOnUpdateCallback sets a callback function to be called when settings are updated
 // This is used for cache invalidation (e.g., HTML cache in frontend server)
 func (s *SettingService) SetOnUpdateCallback(callback func()) {
@@ -1790,6 +1851,7 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyRewriteMessageCacheControl] = strconv.FormatBool(settings.RewriteMessageCacheControl)
 	updates[SettingKeyAntigravityUserAgentVersion] = antigravity.NormalizeUserAgentVersion(settings.AntigravityUserAgentVersion)
 	updates[SettingKeyOpenAICodexUserAgent] = strings.TrimSpace(settings.OpenAICodexUserAgent)
+	updates[SettingKeyOpenAICodexCLIVersion] = strings.TrimSpace(settings.OpenAICodexCLIVersion)
 	updates[SettingPaymentVisibleMethodAlipaySource] = settings.PaymentVisibleMethodAlipaySource
 	updates[SettingPaymentVisibleMethodWxpaySource] = settings.PaymentVisibleMethodWxpaySource
 	updates[SettingPaymentVisibleMethodAlipayEnabled] = strconv.FormatBool(settings.PaymentVisibleMethodAlipayEnabled)
@@ -1881,6 +1943,15 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 	s.openAICodexUACache.Store(&cachedOpenAICodexUserAgent{
 		value:     codexUA,
 		expiresAt: time.Now().Add(openAICodexUserAgentCacheTTL).UnixNano(),
+	})
+	s.openAICodexCLIVersionSF.Forget("openai_codex_cli_version")
+	codexCLIVersion := strings.TrimSpace(settings.OpenAICodexCLIVersion)
+	if codexCLIVersion != "" && !codexCLITargetVersionRe.MatchString(codexCLIVersion) {
+		codexCLIVersion = ""
+	}
+	s.openAICodexCLIVersionCache.Store(&cachedOpenAICodexCLIVersion{
+		value:     codexCLIVersion,
+		expiresAt: time.Now().Add(openAICodexCLIVersionCacheTTL).UnixNano(),
 	})
 	openAIAdvancedSchedulerSettingSF.Forget(openAIAdvancedSchedulerSettingKey)
 	openAIAdvancedSchedulerSettingCache.Store(&cachedOpenAIAdvancedSchedulerSetting{
@@ -2628,6 +2699,7 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyRewriteMessageCacheControl:         strconv.FormatBool(s.defaultRewriteMessageCacheControl()),
 		SettingKeyAntigravityUserAgentVersion:        "",
 		SettingKeyOpenAICodexUserAgent:               "",
+		SettingKeyOpenAICodexCLIVersion:              "",
 		SettingPaymentVisibleMethodAlipaySource:      "",
 		SettingPaymentVisibleMethodWxpaySource:       "",
 		SettingPaymentVisibleMethodAlipayEnabled:     "false",
@@ -3148,6 +3220,10 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	}
 	result.AntigravityUserAgentVersion = antigravity.NormalizeUserAgentVersion(settings[SettingKeyAntigravityUserAgentVersion])
 	result.OpenAICodexUserAgent = strings.TrimSpace(settings[SettingKeyOpenAICodexUserAgent])
+	result.OpenAICodexCLIVersion = strings.TrimSpace(settings[SettingKeyOpenAICodexCLIVersion])
+	if result.OpenAICodexCLIVersion != "" && !codexCLITargetVersionRe.MatchString(result.OpenAICodexCLIVersion) {
+		result.OpenAICodexCLIVersion = ""
+	}
 
 	// Web search emulation: quick enabled check from the JSON config
 	if raw := settings[SettingKeyWebSearchEmulationConfig]; raw != "" {

@@ -3792,6 +3792,53 @@
                 </p>
               </div>
 
+              <!-- OpenAI Codex CLI 版本固定 -->
+              <div>
+                <label
+                  class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
+                >
+                  {{
+                    t(
+                      "admin.settings.gatewayForwarding.openaiCodexCliVersion",
+                    )
+                  }}
+                </label>
+                <input
+                  v-model="form.openai_codex_cli_version"
+                  type="text"
+                  :class="[
+                    'input max-w-xs font-mono text-sm',
+                    isOpenAICodexCLIVersionInvalid
+                      ? 'border-red-500 focus:border-red-500 focus:ring-red-500 dark:border-red-500'
+                      : '',
+                  ]"
+                  :placeholder="
+                    t(
+                      'admin.settings.gatewayForwarding.openaiCodexCliVersionPlaceholder',
+                    )
+                  "
+                  data-testid="openai-codex-cli-version-input"
+                />
+                <p class="mt-1.5 whitespace-pre-line text-xs text-gray-500 dark:text-gray-400">
+                  {{
+                    t(
+                      "admin.settings.gatewayForwarding.openaiCodexCliVersionHint",
+                    )
+                  }}
+                </p>
+                <p
+                  v-if="isOpenAICodexCLIVersionInvalid"
+                  class="mt-1 text-xs text-red-600 dark:text-red-400"
+                  data-testid="openai-codex-cli-version-invalid"
+                >
+                  {{
+                    t(
+                      "admin.settings.gatewayForwarding.openaiCodexCliVersionInvalid",
+                    )
+                  }}
+                </p>
+              </div>
+
               <!-- OpenAI Codex UA -->
               <div>
                 <label
@@ -7029,6 +7076,7 @@ const form = reactive<SettingsForm>({
   rewrite_message_cache_control: false,
   antigravity_user_agent_version: "",
   openai_codex_user_agent: "",
+  openai_codex_cli_version: "",
   // 余额、订阅到期与账号限额通知
   balance_low_notify_enabled: false,
   balance_low_notify_threshold: 0,
@@ -7043,6 +7091,12 @@ const form = reactive<SettingsForm>({
   available_channels_enabled: false,
   // Affiliate (邀请返利) feature switch
   affiliate_enabled: false,
+});
+
+const codexCLIVersionPattern = /^\d+\.\d+\.\d+(-[\w.]+)?$/;
+const isOpenAICodexCLIVersionInvalid = computed(() => {
+  const version = form.openai_codex_cli_version?.trim() || "";
+  return version !== "" && !codexCLIVersionPattern.test(version);
 });
 
 const authSourceDefaults = reactive<AuthSourceDefaultsState>(
@@ -8133,6 +8187,8 @@ async function saveSettings() {
         form.antigravity_user_agent_version?.trim() || "",
       openai_codex_user_agent:
         form.openai_codex_user_agent?.trim() || "",
+      openai_codex_cli_version:
+        form.openai_codex_cli_version?.trim() || "",
       // Payment configuration
       payment_enabled: form.payment_enabled,
       risk_control_enabled: form.risk_control_enabled,
