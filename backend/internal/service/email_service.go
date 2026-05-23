@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"crypto/tls"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/big"
@@ -109,6 +110,20 @@ func NewEmailService(settingRepo SettingRepository, cache EmailCache) *EmailServ
 
 func (s *EmailService) SetNotificationEmailService(notificationEmailService *NotificationEmailService) {
 	s.notificationEmailService = notificationEmailService
+}
+
+func (s *EmailService) IsConfigured(ctx context.Context) bool {
+	if s == nil || s.settingRepo == nil {
+		return false
+	}
+	_, err := s.GetSMTPConfig(ctx)
+	if err == nil {
+		return true
+	}
+	if errors.Is(err, ErrEmailNotConfigured) {
+		return false
+	}
+	return true
 }
 
 func firstEmailLocale(locales []string) string {

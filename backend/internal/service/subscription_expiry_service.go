@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"strconv"
 	"sync"
 	"time"
@@ -14,14 +15,19 @@ import (
 
 // SubscriptionExpiryService periodically updates expired subscription status.
 type SubscriptionExpiryService struct {
-	userSubRepo              UserSubscriptionRepository
-	settingRepo              SettingRepository
-	notificationEmailService *NotificationEmailService
-	interval                 time.Duration
-	stopCh                   chan struct{}
-	stopOnce                 sync.Once
-	wg                       sync.WaitGroup
+	userSubRepo               UserSubscriptionRepository
+	settingRepo               SettingRepository
+	emailService              *EmailService
+	notificationEmailService  *NotificationEmailService
+	interval                  time.Duration
+	stopCh                    chan struct{}
+	stopOnce                  sync.Once
+	wg                        sync.WaitGroup
+	emailNotConfiguredLogMu   sync.Mutex
+	lastEmailNotConfiguredLog time.Time
 }
+
+const subscriptionExpiryEmailNotConfiguredLogInterval = time.Hour
 
 func NewSubscriptionExpiryService(userSubRepo UserSubscriptionRepository, interval time.Duration) *SubscriptionExpiryService {
 	return &SubscriptionExpiryService{
@@ -33,6 +39,10 @@ func NewSubscriptionExpiryService(userSubRepo UserSubscriptionRepository, interv
 
 func (s *SubscriptionExpiryService) SetSettingRepository(settingRepo SettingRepository) {
 	s.settingRepo = settingRepo
+}
+
+func (s *SubscriptionExpiryService) SetEmailService(emailService *EmailService) {
+	s.emailService = emailService
 }
 
 func (s *SubscriptionExpiryService) SetNotificationEmailService(notificationEmailService *NotificationEmailService) {
@@ -75,6 +85,10 @@ func (s *SubscriptionExpiryService) runOnce() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	if !s.emailConfiguredForReminderPass(ctx, time.Now()) {
+		return
+	}
+
 	updated, err := s.userSubRepo.BatchUpdateExpiredStatus(ctx)
 	if err != nil {
 		log.Printf("[SubscriptionExpiry] Update expired subscriptions failed: %v", err)
@@ -84,6 +98,28 @@ func (s *SubscriptionExpiryService) runOnce() {
 		log.Printf("[SubscriptionExpiry] Updated %d expired subscriptions", updated)
 	}
 	s.sendExpiryReminders(ctx)
+}
+
+func (s *SubscriptionExpiryService) emailConfiguredForReminderPass(ctx context.Context, now time.Time) bool {
+	if s == nil || s.emailService == nil {
+		return true
+	}
+	if s.emailService.IsConfigured(ctx) {
+		return true
+	}
+	s.logEmailNotConfiguredSkip(now)
+	return false
+}
+
+func (s *SubscriptionExpiryService) logEmailNotConfiguredSkip(now time.Time) {
+	s.emailNotConfiguredLogMu.Lock()
+	defer s.emailNotConfiguredLogMu.Unlock()
+
+	if !s.lastEmailNotConfiguredLog.IsZero() && now.Sub(s.lastEmailNotConfiguredLog) < subscriptionExpiryEmailNotConfiguredLogInterval {
+		return
+	}
+	s.lastEmailNotConfiguredLog = now
+	slog.Info("[SubscriptionExpiry] email service not configured, skipping reminder pass")
 }
 
 func (s *SubscriptionExpiryService) sendExpiryReminders(ctx context.Context) {
@@ -145,6 +181,9 @@ func (s *SubscriptionExpiryService) sendExpiryReminderIfDue(ctx context.Context,
 			"days_remaining":     strconv.Itoa(daysRemaining),
 		},
 	}); err != nil {
+		if errors.Is(err, ErrEmailNotConfigured) {
+			return
+		}
 		log.Printf("[SubscriptionExpiry] Send expiry reminder failed: subscription=%d user=%d err=%v", sub.ID, sub.UserID, err)
 	}
 }
