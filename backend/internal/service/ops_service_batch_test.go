@@ -69,7 +69,7 @@ func TestOpsServiceRecordErrorBatch_SanitizesAndBatches(t *testing.T) {
 	require.False(t, second.CreatedAt.IsZero())
 }
 
-func TestOpsServiceRecordErrorBatch_FallsBackToSingleInsert(t *testing.T) {
+func TestOpsServiceRecordErrorBatch_DropsBatchFailureWithoutSingleInsertFallback(t *testing.T) {
 	t.Parallel()
 
 	var (
@@ -92,9 +92,28 @@ func TestOpsServiceRecordErrorBatch_FallsBackToSingleInsert(t *testing.T) {
 		{ErrorMessage: "first"},
 		{ErrorMessage: "second"},
 	})
-	require.NoError(t, err)
+	require.Error(t, err)
 	require.Equal(t, 1, batchCalls)
-	require.Equal(t, 2, singleCalls)
+	require.Equal(t, 0, singleCalls)
+}
+
+func TestOpsServiceRecordErrorBatch_SingleEntryAttemptsOnce(t *testing.T) {
+	t.Parallel()
+
+	var singleCalls int
+	repo := &opsRepoMock{
+		InsertErrorLogFn: func(ctx context.Context, input *OpsInsertErrorLogInput) (int64, error) {
+			singleCalls++
+			return 0, errors.New("db unavailable")
+		},
+	}
+	svc := NewOpsService(repo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+
+	err := svc.RecordErrorBatch(context.Background(), []*OpsInsertErrorLogInput{
+		{ErrorMessage: "single"},
+	})
+	require.Error(t, err)
+	require.Equal(t, 1, singleCalls)
 }
 
 func strPtr(v string) *string {

@@ -11,7 +11,9 @@ import (
 )
 
 type subscriptionExpiryRepoStub struct {
-	listCalls int
+	listCalls   int
+	updateCalls int
+	updateErr   error
 }
 
 func (r *subscriptionExpiryRepoStub) Create(context.Context, *UserSubscription) error {
@@ -92,6 +94,10 @@ func (r *subscriptionExpiryRepoStub) IncrementUsage(context.Context, int64, floa
 }
 
 func (r *subscriptionExpiryRepoStub) BatchUpdateExpiredStatus(context.Context) (int64, error) {
+	r.updateCalls++
+	if r.updateErr != nil {
+		return 0, r.updateErr
+	}
 	return 0, nil
 }
 
@@ -161,4 +167,20 @@ func TestSubscriptionExpiryService_ExpiryReminderSettingReadErrorFailsClosed(t *
 	svc.SetSettingRepository(&subscriptionExpirySettingRepoStub{err: errors.New("db down")})
 
 	require.False(t, svc.expiryReminderEnabled(context.Background()))
+}
+
+func TestSubscriptionExpiryService_RunOnceSkipsWhenDBUnhealthy(t *testing.T) {
+	now := time.Date(2026, 5, 25, 13, 0, 0, 0, time.UTC)
+	gate := newDBHealthGate(func() time.Time { return now })
+	for i := 0; i < dbHealthGateMinFailures; i++ {
+		gate.MarkFailure()
+	}
+
+	repo := &subscriptionExpiryRepoStub{}
+	svc := NewSubscriptionExpiryService(repo, time.Minute)
+	svc.dbGate = gate
+
+	svc.runOnce()
+
+	require.Zero(t, repo.updateCalls)
 }

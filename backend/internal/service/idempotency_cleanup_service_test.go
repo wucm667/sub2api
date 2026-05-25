@@ -67,3 +67,19 @@ func TestIdempotencyCleanupService_CleanupOnce(t *testing.T) {
 	require.Equal(t, 1, repo.deleteCalls)
 	require.Equal(t, 99, repo.lastLimit)
 }
+
+func TestIdempotencyCleanupService_CleanupOnceSkipsWhenDBUnhealthy(t *testing.T) {
+	now := time.Date(2026, 5, 25, 13, 30, 0, 0, time.UTC)
+	gate := newDBHealthGate(func() time.Time { return now })
+	for i := 0; i < dbHealthGateMinFailures; i++ {
+		gate.MarkFailure()
+	}
+
+	repo := &idempotencyCleanupRepoStub{}
+	svc := NewIdempotencyCleanupService(repo, nil)
+	svc.dbGate = gate
+
+	svc.cleanupOnce()
+
+	require.Zero(t, repo.deleteCalls)
+}

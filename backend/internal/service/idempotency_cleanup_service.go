@@ -14,6 +14,7 @@ type IdempotencyCleanupService struct {
 	repo     IdempotencyRepository
 	interval time.Duration
 	batch    int
+	dbGate   *dbHealthGate
 
 	startOnce sync.Once
 	stopOnce  sync.Once
@@ -35,6 +36,7 @@ func NewIdempotencyCleanupService(repo IdempotencyRepository, cfg *config.Config
 		repo:     repo,
 		interval: interval,
 		batch:    batch,
+		dbGate:   DefaultDBHealthGate(),
 		stopCh:   make(chan struct{}),
 	}
 }
@@ -77,15 +79,29 @@ func (s *IdempotencyCleanupService) runLoop() {
 }
 
 func (s *IdempotencyCleanupService) cleanupOnce() {
+	if !s.dbHealthGate().IsHealthy() {
+		s.dbHealthGate().LogSkip("idempotency_cleanup", "cleanup_once")
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	deleted, err := s.repo.DeleteExpired(ctx, time.Now(), s.batch)
 	if err != nil {
+		s.dbHealthGate().MarkFailure()
 		logger.LegacyPrintf("service.idempotency_cleanup", "[IdempotencyCleanup] cleanup failed err=%v", err)
 		return
 	}
+	s.dbHealthGate().MarkSuccess()
 	if deleted > 0 {
 		logger.LegacyPrintf("service.idempotency_cleanup", "[IdempotencyCleanup] cleaned expired records count=%d", deleted)
 	}
+}
+
+func (s *IdempotencyCleanupService) dbHealthGate() *dbHealthGate {
+	if s == nil || s.dbGate == nil {
+		return DefaultDBHealthGate()
+	}
+	return s.dbGate
 }

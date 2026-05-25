@@ -78,15 +78,16 @@ var (
 	opsErrorLogOnce  sync.Once
 	opsErrorLogQueue chan opsErrorLogJob
 
-	opsErrorLogStopOnce  sync.Once
-	opsErrorLogWorkersWg sync.WaitGroup
-	opsErrorLogMu        sync.RWMutex
-	opsErrorLogStopping  bool
-	opsErrorLogQueueLen  atomic.Int64
-	opsErrorLogEnqueued  atomic.Int64
-	opsErrorLogDropped   atomic.Int64
-	opsErrorLogProcessed atomic.Int64
-	opsErrorLogSanitized atomic.Int64
+	opsErrorLogStopOnce           sync.Once
+	opsErrorLogWorkersWg          sync.WaitGroup
+	opsErrorLogMu                 sync.RWMutex
+	opsErrorLogStopping           bool
+	opsErrorLogQueueLen           atomic.Int64
+	opsErrorLogEnqueued           atomic.Int64
+	opsErrorLogDropped            atomic.Int64
+	opsErrorLogProcessed          atomic.Int64
+	opsErrorLogSanitized          atomic.Int64
+	opsErrorLogDroppedOnDBFailure atomic.Int64
 
 	opsErrorLogLastDropLogAt atomic.Int64
 
@@ -180,9 +181,21 @@ func flushOpsErrorLogBatch(batch []opsErrorLogJob) {
 		if opsSvc == nil || len(entries) == 0 {
 			continue
 		}
+		dbGate := service.DefaultDBHealthGate()
+		if !dbGate.IsHealthy() {
+			opsErrorLogDroppedOnDBFailure.Add(int64(len(entries)))
+			dbGate.LogSkip("ops_error_logger", "record_error_batch")
+			continue
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), opsErrorLogTimeout)
-		_ = opsSvc.RecordErrorBatch(ctx, entries)
+		err := opsSvc.RecordErrorBatch(ctx, entries)
 		cancel()
+		if err != nil {
+			opsErrorLogDroppedOnDBFailure.Add(int64(len(entries)))
+			dbGate.MarkFailure()
+		} else {
+			dbGate.MarkSuccess()
+		}
 	}
 	opsErrorLogProcessed.Add(processed)
 }
@@ -293,6 +306,10 @@ func OpsErrorLogSanitizedTotal() int64 {
 	return opsErrorLogSanitized.Load()
 }
 
+func OpsErrorLogDroppedOnDBFailureTotal() int64 {
+	return opsErrorLogDroppedOnDBFailure.Load()
+}
+
 func maybeLogOpsErrorLogDrop() {
 	now := time.Now().Unix()
 
@@ -310,11 +327,12 @@ func maybeLogOpsErrorLogDrop() {
 	queueCap := OpsErrorLogQueueCapacity()
 
 	log.Printf(
-		"[OpsErrorLogger] queue is full; dropping logs (queued=%d cap=%d enqueued_total=%d dropped_total=%d processed_total=%d sanitized_total=%d)",
+		"[OpsErrorLogger] queue is full; dropping logs (queued=%d cap=%d enqueued_total=%d dropped_total=%d dropped_on_db_failure_total=%d processed_total=%d sanitized_total=%d)",
 		queued,
 		queueCap,
 		opsErrorLogEnqueued.Load(),
 		opsErrorLogDropped.Load(),
+		opsErrorLogDroppedOnDBFailure.Load(),
 		opsErrorLogProcessed.Load(),
 		opsErrorLogSanitized.Load(),
 	)

@@ -37,7 +37,9 @@ func resetOpsErrorLoggerStateForTest(t *testing.T) {
 	opsErrorLogDropped.Store(0)
 	opsErrorLogProcessed.Store(0)
 	opsErrorLogSanitized.Store(0)
+	opsErrorLogDroppedOnDBFailure.Store(0)
 	opsErrorLogLastDropLogAt.Store(0)
+	service.DefaultDBHealthGate().Reset()
 
 	opsErrorLogShutdownCh = make(chan struct{})
 	opsErrorLogShutdownOnce = sync.Once{}

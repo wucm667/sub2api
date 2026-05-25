@@ -18,7 +18,14 @@ var (
 	ErrSchedulerFallbackLimited = errors.New("scheduler db fallback limited")
 )
 
-const outboxEventTimeout = 2 * time.Minute
+const (
+	outboxEventTimeout = 2 * time.Minute
+
+	schedulerRebuildBackoffFailureThreshold = 3
+	schedulerRebuildBackoffInitial          = 30 * time.Second
+	schedulerRebuildBackoffMax              = 5 * time.Minute
+	schedulerRebuildBackoffLogInterval      = time.Minute
+)
 
 // batchSeenKey tracks which (groupID, platform) bucket sets have already been
 // rebuilt within a single pollOutbox call, to avoid redundant work when multiple
@@ -29,17 +36,23 @@ type batchSeenKey struct {
 }
 
 type SchedulerSnapshotService struct {
-	cache         SchedulerCache
-	outboxRepo    SchedulerOutboxRepository
-	accountRepo   AccountRepository
-	groupRepo     GroupRepository
-	cfg           *config.Config
-	stopCh        chan struct{}
-	stopOnce      sync.Once
-	wg            sync.WaitGroup
-	fallbackLimit *fallbackLimiter
-	lagMu         sync.Mutex
-	lagFailures   int
+	cache                   SchedulerCache
+	outboxRepo              SchedulerOutboxRepository
+	accountRepo             AccountRepository
+	groupRepo               GroupRepository
+	cfg                     *config.Config
+	stopCh                  chan struct{}
+	stopOnce                sync.Once
+	wg                      sync.WaitGroup
+	fallbackLimit           *fallbackLimiter
+	dbGate                  *dbHealthGate
+	now                     func() time.Time
+	lagMu                   sync.Mutex
+	lagFailures             int
+	rebuildMu               sync.Mutex
+	rebuildFailures         int
+	rebuildBackoffUntil     time.Time
+	rebuildBackoffLastLogAt time.Time
 }
 
 func NewSchedulerSnapshotService(
@@ -61,6 +74,8 @@ func NewSchedulerSnapshotService(
 		cfg:           cfg,
 		stopCh:        make(chan struct{}),
 		fallbackLimit: newFallbackLimiter(maxQPS),
+		dbGate:        DefaultDBHealthGate(),
+		now:           time.Now,
 	}
 }
 
@@ -180,6 +195,9 @@ func (s *SchedulerSnapshotService) runInitialRebuild() {
 	if s.cache == nil {
 		return
 	}
+	if s.skipBackgroundDBWork("initial_rebuild") {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	buckets, err := s.cache.ListBuckets(ctx)
@@ -194,7 +212,10 @@ func (s *SchedulerSnapshotService) runInitialRebuild() {
 		}
 	}
 	if err := s.rebuildBuckets(ctx, buckets, "startup"); err != nil {
+		s.recordRebuildFailure("startup", err)
 		logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] rebuild startup failed: %v", err)
+	} else {
+		s.recordRebuildSuccess()
 	}
 }
 
@@ -233,6 +254,9 @@ func (s *SchedulerSnapshotService) pollOutbox() {
 	if s.outboxRepo == nil || s.cache == nil {
 		return
 	}
+	if s.skipBackgroundDBWork("outbox_poll") {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -244,9 +268,11 @@ func (s *SchedulerSnapshotService) pollOutbox() {
 
 	events, err := s.outboxRepo.ListAfter(ctx, watermark, 200)
 	if err != nil {
+		s.markBackgroundDBFailure()
 		logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] outbox poll failed: %v", err)
 		return
 	}
+	s.markBackgroundDBSuccess()
 	if len(events) == 0 {
 		return
 	}
@@ -362,8 +388,10 @@ func (s *SchedulerSnapshotService) handleBulkAccountEvent(ctx context.Context, p
 	preloadGroupIDs := parseInt64Slice(payload["group_ids"])
 	accounts, err := s.accountRepo.GetByIDs(ctx, ids)
 	if err != nil {
+		s.markBackgroundDBFailure()
 		return err
 	}
+	s.markBackgroundDBSuccess()
 
 	found := make(map[int64]struct{}, len(accounts))
 	rebuildGroupSet := make(map[int64]struct{}, len(preloadGroupIDs))
@@ -424,6 +452,7 @@ func (s *SchedulerSnapshotService) handleAccountEvent(ctx context.Context, accou
 	account, err := s.accountRepo.GetByID(ctx, *accountID)
 	if err != nil {
 		if errors.Is(err, ErrAccountNotFound) {
+			s.markBackgroundDBSuccess()
 			if s.cache != nil {
 				if err := s.cache.DeleteAccount(ctx, *accountID); err != nil {
 					return err
@@ -431,8 +460,10 @@ func (s *SchedulerSnapshotService) handleAccountEvent(ctx context.Context, accou
 			}
 			return s.rebuildByGroupIDs(ctx, groupIDs, "account_miss", seen)
 		}
+		s.markBackgroundDBFailure()
 		return err
 	}
+	s.markBackgroundDBSuccess()
 	if s.cache != nil {
 		if err := s.cache.SetAccount(ctx, account); err != nil {
 			return err
@@ -508,15 +539,30 @@ func (s *SchedulerSnapshotService) rebuildBucketsForPlatform(ctx context.Context
 			}
 			seen[key] = struct{}{}
 		}
-		if err := s.rebuildBucket(ctx, SchedulerBucket{GroupID: gid, Platform: platform, Mode: SchedulerModeSingle}, reason); err != nil && firstErr == nil {
-			firstErr = err
+		if err := s.rebuildBucket(ctx, SchedulerBucket{GroupID: gid, Platform: platform, Mode: SchedulerModeSingle}, reason); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			if !s.dbHealthGate().IsHealthy() {
+				return firstErr
+			}
 		}
-		if err := s.rebuildBucket(ctx, SchedulerBucket{GroupID: gid, Platform: platform, Mode: SchedulerModeForced}, reason); err != nil && firstErr == nil {
-			firstErr = err
+		if err := s.rebuildBucket(ctx, SchedulerBucket{GroupID: gid, Platform: platform, Mode: SchedulerModeForced}, reason); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			if !s.dbHealthGate().IsHealthy() {
+				return firstErr
+			}
 		}
 		if platform == PlatformAnthropic || platform == PlatformGemini {
-			if err := s.rebuildBucket(ctx, SchedulerBucket{GroupID: gid, Platform: platform, Mode: SchedulerModeMixed}, reason); err != nil && firstErr == nil {
-				firstErr = err
+			if err := s.rebuildBucket(ctx, SchedulerBucket{GroupID: gid, Platform: platform, Mode: SchedulerModeMixed}, reason); err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				if !s.dbHealthGate().IsHealthy() {
+					return firstErr
+				}
 			}
 		}
 	}
@@ -526,8 +572,13 @@ func (s *SchedulerSnapshotService) rebuildBucketsForPlatform(ctx context.Context
 func (s *SchedulerSnapshotService) rebuildBuckets(ctx context.Context, buckets []SchedulerBucket, reason string) error {
 	var firstErr error
 	for _, bucket := range buckets {
-		if err := s.rebuildBucket(ctx, bucket, reason); err != nil && firstErr == nil {
-			firstErr = err
+		if err := s.rebuildBucket(ctx, bucket, reason); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			if !s.dbHealthGate().IsHealthy() {
+				return firstErr
+			}
 		}
 	}
 	return firstErr
@@ -553,9 +604,11 @@ func (s *SchedulerSnapshotService) rebuildBucket(ctx context.Context, bucket Sch
 
 	accounts, err := s.loadAccountsFromDB(rebuildCtx, bucket, bucket.Mode == SchedulerModeMixed)
 	if err != nil {
+		s.markBackgroundDBFailure()
 		logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] rebuild failed: bucket=%s reason=%s err=%v", bucket.String(), reason, err)
 		return err
 	}
+	s.markBackgroundDBSuccess()
 	if err := s.cache.SetSnapshot(rebuildCtx, bucket, accounts); err != nil {
 		logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] rebuild cache failed: bucket=%s reason=%s err=%v", bucket.String(), reason, err)
 		return err
@@ -567,6 +620,9 @@ func (s *SchedulerSnapshotService) rebuildBucket(ctx context.Context, bucket Sch
 func (s *SchedulerSnapshotService) triggerFullRebuild(reason string) error {
 	if s.cache == nil {
 		return ErrSchedulerCacheNotReady
+	}
+	if s.skipBackgroundDBWork("full_rebuild") || s.shouldSkipRebuild(reason) {
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -583,7 +639,12 @@ func (s *SchedulerSnapshotService) triggerFullRebuild(reason string) error {
 			return err
 		}
 	}
-	return s.rebuildBuckets(ctx, buckets, reason)
+	if err := s.rebuildBuckets(ctx, buckets, reason); err != nil {
+		s.recordRebuildFailure(reason, err)
+		return err
+	}
+	s.recordRebuildSuccess()
+	return nil
 }
 
 func (s *SchedulerSnapshotService) checkOutboxLag(ctx context.Context, oldest SchedulerOutboxEvent, watermark int64) {
@@ -621,10 +682,15 @@ func (s *SchedulerSnapshotService) checkOutboxLag(ctx context.Context, oldest Sc
 	if threshold <= 0 || s.outboxRepo == nil {
 		return
 	}
-	maxID, err := s.outboxRepo.MaxID(ctx)
-	if err != nil {
+	if s.skipBackgroundDBWork("outbox_backlog_check") {
 		return
 	}
+	maxID, err := s.outboxRepo.MaxID(ctx)
+	if err != nil {
+		s.markBackgroundDBFailure()
+		return
+	}
+	s.markBackgroundDBSuccess()
 	if maxID-watermark >= int64(threshold) {
 		logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] outbox backlog rebuild triggered: backlog=%d", maxID-watermark)
 		if err := s.triggerFullRebuild("outbox_backlog"); err != nil {
@@ -798,8 +864,10 @@ func (s *SchedulerSnapshotService) defaultBuckets(ctx context.Context) ([]Schedu
 
 	groups, err := s.groupRepo.ListActive(ctx)
 	if err != nil {
+		s.markBackgroundDBFailure()
 		return dedupeBuckets(buckets), nil
 	}
+	s.markBackgroundDBSuccess()
 	for _, group := range groups {
 		if group.Platform == "" {
 			continue
@@ -811,6 +879,106 @@ func (s *SchedulerSnapshotService) defaultBuckets(ctx context.Context) ([]Schedu
 		}
 	}
 	return dedupeBuckets(buckets), nil
+}
+
+func (s *SchedulerSnapshotService) dbHealthGate() *dbHealthGate {
+	if s == nil || s.dbGate == nil {
+		return DefaultDBHealthGate()
+	}
+	return s.dbGate
+}
+
+func (s *SchedulerSnapshotService) nowTime() time.Time {
+	if s == nil || s.now == nil {
+		return time.Now()
+	}
+	return s.now()
+}
+
+func (s *SchedulerSnapshotService) skipBackgroundDBWork(operation string) bool {
+	gate := s.dbHealthGate()
+	if gate.IsHealthy() {
+		return false
+	}
+	gate.LogSkip("scheduler_snapshot", operation)
+	return true
+}
+
+func (s *SchedulerSnapshotService) markBackgroundDBFailure() {
+	s.dbHealthGate().MarkFailure()
+}
+
+func (s *SchedulerSnapshotService) markBackgroundDBSuccess() {
+	s.dbHealthGate().MarkSuccess()
+}
+
+func (s *SchedulerSnapshotService) shouldSkipRebuild(reason string) bool {
+	if s == nil {
+		return false
+	}
+	s.rebuildMu.Lock()
+	defer s.rebuildMu.Unlock()
+
+	now := s.nowTime()
+	if !now.Before(s.rebuildBackoffUntil) {
+		return false
+	}
+	if s.rebuildBackoffLastLogAt.IsZero() || now.Sub(s.rebuildBackoffLastLogAt) >= schedulerRebuildBackoffLogInterval {
+		s.rebuildBackoffLastLogAt = now
+		logger.LegacyPrintf(
+			"service.scheduler_snapshot",
+			"[Scheduler] rebuild skipped by backoff: reason=%s failures=%d until=%s",
+			reason,
+			s.rebuildFailures,
+			s.rebuildBackoffUntil.Format(time.RFC3339),
+		)
+	}
+	return true
+}
+
+func (s *SchedulerSnapshotService) recordRebuildFailure(reason string, err error) {
+	if s == nil {
+		return
+	}
+	s.rebuildMu.Lock()
+	defer s.rebuildMu.Unlock()
+
+	s.rebuildFailures++
+	if s.rebuildFailures < schedulerRebuildBackoffFailureThreshold {
+		return
+	}
+
+	delay := schedulerRebuildBackoffInitial
+	for i := 0; i < s.rebuildFailures-schedulerRebuildBackoffFailureThreshold && delay < schedulerRebuildBackoffMax; i++ {
+		delay *= 2
+	}
+	if delay > schedulerRebuildBackoffMax {
+		delay = schedulerRebuildBackoffMax
+	}
+
+	now := s.nowTime()
+	s.rebuildBackoffUntil = now.Add(delay)
+	s.rebuildBackoffLastLogAt = now
+	logger.LegacyPrintf(
+		"service.scheduler_snapshot",
+		"[Scheduler] rebuild backoff enabled: reason=%s failures=%d delay=%s err=%v",
+		reason,
+		s.rebuildFailures,
+		delay,
+		err,
+	)
+}
+
+func (s *SchedulerSnapshotService) recordRebuildSuccess() {
+	if s == nil {
+		return
+	}
+	s.rebuildMu.Lock()
+	defer s.rebuildMu.Unlock()
+
+	s.rebuildFailures = 0
+	s.rebuildBackoffUntil = time.Time{}
+	s.rebuildBackoffLastLogAt = time.Time{}
 }
 
 func dedupeBuckets(in []SchedulerBucket) []SchedulerBucket {

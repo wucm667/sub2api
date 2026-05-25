@@ -21,6 +21,7 @@ type SubscriptionExpiryService struct {
 	stopCh                   chan struct{}
 	stopOnce                 sync.Once
 	wg                       sync.WaitGroup
+	dbGate                   *dbHealthGate
 }
 
 func NewSubscriptionExpiryService(userSubRepo UserSubscriptionRepository, interval time.Duration) *SubscriptionExpiryService {
@@ -28,6 +29,7 @@ func NewSubscriptionExpiryService(userSubRepo UserSubscriptionRepository, interv
 		userSubRepo: userSubRepo,
 		interval:    interval,
 		stopCh:      make(chan struct{}),
+		dbGate:      DefaultDBHealthGate(),
 	}
 }
 
@@ -72,14 +74,21 @@ func (s *SubscriptionExpiryService) Stop() {
 }
 
 func (s *SubscriptionExpiryService) runOnce() {
+	if !s.dbHealthGate().IsHealthy() {
+		s.dbHealthGate().LogSkip("subscription_expiry", "run_once")
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	updated, err := s.userSubRepo.BatchUpdateExpiredStatus(ctx)
 	if err != nil {
+		s.dbHealthGate().MarkFailure()
 		log.Printf("[SubscriptionExpiry] Update expired subscriptions failed: %v", err)
 		return
 	}
+	s.dbHealthGate().MarkSuccess()
 	if updated > 0 {
 		log.Printf("[SubscriptionExpiry] Updated %d expired subscriptions", updated)
 	}
@@ -96,9 +105,11 @@ func (s *SubscriptionExpiryService) sendExpiryReminders(ctx context.Context) {
 	for page := 1; ; page++ {
 		subs, pag, err := s.userSubRepo.List(ctx, pagination.PaginationParams{Page: page, PageSize: 200}, nil, nil, SubscriptionStatusActive, "", "expires_at", "asc")
 		if err != nil {
+			s.dbHealthGate().MarkFailure()
 			log.Printf("[SubscriptionExpiry] List active subscriptions for reminder failed: %v", err)
 			return
 		}
+		s.dbHealthGate().MarkSuccess()
 		for i := range subs {
 			s.sendExpiryReminderIfDue(ctx, &subs[i])
 		}
@@ -118,6 +129,7 @@ func (s *SubscriptionExpiryService) expiryReminderEnabled(ctx context.Context) b
 			return true
 		}
 		log.Printf("[SubscriptionExpiry] Read expiry reminder switch failed: %v", err)
+		s.dbHealthGate().MarkFailure()
 		return false
 	}
 	return !isFalseSettingValue(value)
@@ -147,4 +159,11 @@ func (s *SubscriptionExpiryService) sendExpiryReminderIfDue(ctx context.Context,
 	}); err != nil {
 		log.Printf("[SubscriptionExpiry] Send expiry reminder failed: subscription=%d user=%d err=%v", sub.ID, sub.UserID, err)
 	}
+}
+
+func (s *SubscriptionExpiryService) dbHealthGate() *dbHealthGate {
+	if s == nil || s.dbGate == nil {
+		return DefaultDBHealthGate()
+	}
+	return s.dbGate
 }

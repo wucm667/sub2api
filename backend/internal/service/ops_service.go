@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -160,25 +161,51 @@ func (s *OpsService) RecordErrorBatch(ctx context.Context, entries []*OpsInsertE
 	if len(prepared) == 1 {
 		_, err := s.opsRepo.InsertErrorLog(ctx, prepared[0])
 		if err != nil {
-			log.Printf("[Ops] RecordErrorBatch single insert failed: %v", err)
+			log.Printf("[Ops] RecordErrorBatch single insert failed; dropping entry: %v", err)
+			logDroppedOpsErrorLogOnDBFailure(prepared[0], err)
 		}
 		return err
 	}
 
 	if _, err := s.opsRepo.BatchInsertErrorLogs(ctx, prepared); err != nil {
-		log.Printf("[Ops] RecordErrorBatch failed, fallback to single inserts: %v", err)
-		var firstErr error
+		log.Printf("[Ops] RecordErrorBatch failed; dropping entries without single insert fallback: %v", err)
 		for _, entry := range prepared {
-			if _, insertErr := s.opsRepo.InsertErrorLog(ctx, entry); insertErr != nil {
-				log.Printf("[Ops] RecordErrorBatch fallback insert failed: %v", insertErr)
-				if firstErr == nil {
-					firstErr = insertErr
-				}
-			}
+			logDroppedOpsErrorLogOnDBFailure(entry, err)
 		}
-		return firstErr
+		return err
 	}
 	return nil
+}
+
+func logDroppedOpsErrorLogOnDBFailure(entry *OpsInsertErrorLogInput, err error) {
+	if entry == nil {
+		return
+	}
+
+	status := entry.StatusCode
+	if status == 0 && entry.UpstreamStatusCode != nil {
+		status = *entry.UpstreamStatusCode
+	}
+	message := strings.TrimSpace(entry.ErrorMessage)
+	if message == "" && entry.UpstreamErrorMessage != nil {
+		message = strings.TrimSpace(*entry.UpstreamErrorMessage)
+	}
+
+	slog.Error(
+		"[Ops] dropping error log after DB failure",
+		"user_id", int64PtrValue(entry.UserID),
+		"endpoint", firstNonEmpty(entry.InboundEndpoint, entry.RequestPath, entry.UpstreamEndpoint),
+		"status", status,
+		"message", truncateString(message, 512),
+		"error", err,
+	)
+}
+
+func int64PtrValue(v *int64) any {
+	if v == nil {
+		return nil
+	}
+	return *v
 }
 
 func (s *OpsService) prepareErrorLogInput(ctx context.Context, entry *OpsInsertErrorLogInput) (*OpsInsertErrorLogInput, bool, error) {
