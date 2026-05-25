@@ -94,12 +94,24 @@
                   <p class="mt-2 text-2xl font-semibold text-emerald-700 dark:text-emerald-300">{{ status?.idle_workers ?? configForm.worker_count }}</p>
                 </div>
                 <div class="rounded-lg bg-gray-50 p-4 dark:bg-dark-700/50">
-                  <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.processed') }}</p>
-                  <p class="mt-2 text-2xl font-semibold text-gray-900 dark:text-white">{{ formatNumber(status?.processed ?? 0) }}</p>
+                  <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.asyncProcessed') }}</p>
+                  <p class="mt-2 text-2xl font-semibold text-gray-900 dark:text-white">{{ formatNumber(status?.async_processed ?? status?.processed ?? 0) }}</p>
                 </div>
                 <div class="rounded-lg bg-gray-50 p-4 dark:bg-dark-700/50">
                   <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.droppedErrors') }}</p>
                   <p class="mt-2 text-2xl font-semibold text-gray-900 dark:text-white">{{ formatNumber((status?.dropped ?? 0) + (status?.errors ?? 0)) }}</p>
+                </div>
+                <div class="rounded-lg bg-sky-50 p-4 dark:bg-sky-900/10">
+                  <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.syncProcessed') }}</p>
+                  <p class="mt-2 text-2xl font-semibold text-sky-700 dark:text-sky-300">{{ formatNumber(status?.sync_processed ?? 0) }}</p>
+                </div>
+                <div class="rounded-lg bg-rose-50 p-4 dark:bg-rose-900/10">
+                  <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.syncBlocked') }}</p>
+                  <p class="mt-2 text-2xl font-semibold text-rose-700 dark:text-rose-300">{{ formatNumber(status?.sync_blocked ?? 0) }}</p>
+                </div>
+                <div class="rounded-lg bg-emerald-50 p-4 dark:bg-emerald-900/10">
+                  <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.syncPassed') }}</p>
+                  <p class="mt-2 text-2xl font-semibold text-emerald-700 dark:text-emerald-300">{{ formatNumber(status?.sync_passed ?? 0) }}</p>
                 </div>
               </div>
             </div>

@@ -410,6 +410,10 @@ type ContentModerationRuntimeStatus struct {
 	Enqueued                 int64                           `json:"enqueued"`
 	Dropped                  int64                           `json:"dropped"`
 	Processed                int64                           `json:"processed"`
+	AsyncProcessed           int64                           `json:"async_processed"`
+	SyncProcessed            int64                           `json:"sync_processed"`
+	SyncBlocked              int64                           `json:"sync_blocked"`
+	SyncPassed               int64                           `json:"sync_passed"`
 	Errors                   int64                           `json:"errors"`
 	APIKeyStatuses           []ContentModerationAPIKeyStatus `json:"api_key_statuses"`
 	FlaggedHashCount         int64                           `json:"flagged_hash_count"`
@@ -464,6 +468,9 @@ type ContentModerationService struct {
 	asyncDropped             atomic.Int64
 	asyncProcessed           atomic.Int64
 	asyncErrors              atomic.Int64
+	syncProcessed            atomic.Int64
+	syncBlocked              atomic.Int64
+	syncPassed               atomic.Int64
 	lastCleanupUnix          atomic.Int64
 	lastCleanupDeletedHit    atomic.Int64
 	lastCleanupDeletedNonHit atomic.Int64
@@ -920,7 +927,21 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 		return allow, nil
 	}
 
-	return s.checkSync(ctx, input, cfg, content, hashText, nil, true), nil
+	decision := s.checkSync(ctx, input, cfg, content, hashText, nil, true)
+	s.recordSyncDecision(decision)
+	return decision, nil
+}
+
+func (s *ContentModerationService) recordSyncDecision(decision *ContentModerationDecision) {
+	if s == nil {
+		return
+	}
+	s.syncProcessed.Add(1)
+	if decision != nil && decision.Action == ContentModerationActionBlock {
+		s.syncBlocked.Add(1)
+		return
+	}
+	s.syncPassed.Add(1)
 }
 
 func (s *ContentModerationService) checkSync(ctx context.Context, input ContentModerationCheckInput, cfg *ContentModerationConfig, content ContentModerationInput, hashText string, queueDelay *int, allowBlock bool) *ContentModerationDecision {
@@ -1202,6 +1223,7 @@ func (s *ContentModerationService) GetStatus(ctx context.Context) (*ContentModer
 		t := time.Unix(unix, 0)
 		lastCleanupAt = &t
 	}
+	asyncProcessed := s.asyncProcessed.Load()
 	return &ContentModerationRuntimeStatus{
 		Enabled:                  cfg.Enabled,
 		RiskControlEnabled:       riskEnabled,
@@ -1215,7 +1237,11 @@ func (s *ContentModerationService) GetStatus(ctx context.Context) (*ContentModer
 		QueueUsagePercent:        queueUsage,
 		Enqueued:                 s.asyncEnqueued.Load(),
 		Dropped:                  s.asyncDropped.Load(),
-		Processed:                s.asyncProcessed.Load(),
+		Processed:                asyncProcessed,
+		AsyncProcessed:           asyncProcessed,
+		SyncProcessed:            s.syncProcessed.Load(),
+		SyncBlocked:              s.syncBlocked.Load(),
+		SyncPassed:               s.syncPassed.Load(),
 		Errors:                   s.asyncErrors.Load(),
 		APIKeyStatuses:           s.apiKeyStatuses(cfg.apiKeys()),
 		FlaggedHashCount:         flaggedHashCount,

@@ -431,6 +431,137 @@ func TestContentModerationCheck_KeywordsIgnoredInObserveMode(t *testing.T) {
 	require.Equal(t, ContentModerationActionAllow, decision.Action)
 }
 
+func TestContentModerationCheck_PreBlockUpdatesSyncRuntimeCounters(t *testing.T) {
+	scores := []float64{0.9, 0.1}
+	requestIndex := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		score := scores[requestIndex]
+		requestIndex++
+		_ = json.NewEncoder(w).Encode(moderationAPIResponse{
+			Results: []moderationAPIResult{{
+				CategoryScores: map[string]float64{"sexual": score},
+			}},
+		})
+	}))
+	defer server.Close()
+
+	cfg := defaultContentModerationConfig()
+	cfg.Enabled = true
+	cfg.Mode = ContentModerationModePreBlock
+	cfg.BaseURL = server.URL
+	cfg.APIKeys = []string{"sk-test"}
+	rawCfg, err := json.Marshal(cfg)
+	require.NoError(t, err)
+
+	svc := NewContentModerationService(
+		&contentModerationTestSettingRepo{values: map[string]string{
+			SettingKeyRiskControlEnabled:      "true",
+			SettingKeyContentModerationConfig: string(rawCfg),
+		}},
+		&contentModerationTestRepo{},
+		&contentModerationTestHashCache{},
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+
+	blockDecision, err := svc.Check(context.Background(), ContentModerationCheckInput{
+		Endpoint: "/v1/chat/completions",
+		Provider: "openai",
+		Protocol: ContentModerationProtocolOpenAIChat,
+		Body:     []byte(`{"messages":[{"role":"user","content":"bad prompt"}]}`),
+	})
+	require.NoError(t, err)
+	require.True(t, blockDecision.Blocked)
+	require.Equal(t, ContentModerationActionBlock, blockDecision.Action)
+
+	status, err := svc.GetStatus(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, int64(0), status.Processed)
+	require.Equal(t, int64(0), status.AsyncProcessed)
+	require.Equal(t, int64(1), status.SyncProcessed)
+	require.Equal(t, int64(1), status.SyncBlocked)
+	require.Equal(t, int64(0), status.SyncPassed)
+
+	passDecision, err := svc.Check(context.Background(), ContentModerationCheckInput{
+		Endpoint: "/v1/chat/completions",
+		Provider: "openai",
+		Protocol: ContentModerationProtocolOpenAIChat,
+		Body:     []byte(`{"messages":[{"role":"user","content":"clean prompt"}]}`),
+	})
+	require.NoError(t, err)
+	require.True(t, passDecision.Allowed)
+	require.False(t, passDecision.Blocked)
+	require.Equal(t, ContentModerationActionAllow, passDecision.Action)
+
+	status, err = svc.GetStatus(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, int64(0), status.Processed)
+	require.Equal(t, int64(0), status.AsyncProcessed)
+	require.Equal(t, int64(2), status.SyncProcessed)
+	require.Equal(t, int64(1), status.SyncBlocked)
+	require.Equal(t, int64(1), status.SyncPassed)
+}
+
+func TestContentModerationCheck_ObserveUpdatesAsyncRuntimeCounters(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(moderationAPIResponse{
+			Results: []moderationAPIResult{{
+				CategoryScores: map[string]float64{"sexual": 0.1},
+			}},
+		})
+	}))
+	defer server.Close()
+
+	cfg := defaultContentModerationConfig()
+	cfg.Enabled = true
+	cfg.Mode = ContentModerationModeObserve
+	cfg.BaseURL = server.URL
+	cfg.APIKeys = []string{"sk-test"}
+	rawCfg, err := json.Marshal(cfg)
+	require.NoError(t, err)
+
+	svc := NewContentModerationService(
+		&contentModerationTestSettingRepo{values: map[string]string{
+			SettingKeyRiskControlEnabled:      "true",
+			SettingKeyContentModerationConfig: string(rawCfg),
+		}},
+		&contentModerationTestRepo{},
+		&contentModerationTestHashCache{},
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+
+	decision, err := svc.Check(context.Background(), ContentModerationCheckInput{
+		Endpoint: "/v1/chat/completions",
+		Provider: "openai",
+		Protocol: ContentModerationProtocolOpenAIChat,
+		Body:     []byte(`{"messages":[{"role":"user","content":"observe prompt"}]}`),
+	})
+	require.NoError(t, err)
+	require.True(t, decision.Allowed)
+	require.Equal(t, ContentModerationActionAllow, decision.Action)
+
+	var status *ContentModerationRuntimeStatus
+	require.Eventually(t, func() bool {
+		var statusErr error
+		status, statusErr = svc.GetStatus(context.Background())
+		if statusErr != nil {
+			return false
+		}
+		return status.AsyncProcessed == 1
+	}, 3*time.Second, 20*time.Millisecond)
+
+	require.Equal(t, int64(1), status.Processed)
+	require.Equal(t, status.Processed, status.AsyncProcessed)
+	require.Equal(t, int64(0), status.SyncProcessed)
+	require.Equal(t, int64(0), status.SyncBlocked)
+	require.Equal(t, int64(0), status.SyncPassed)
+}
+
 func TestContentModerationCheck_KeywordOnlyStrategySkipsAPIOnMiss(t *testing.T) {
 	upstreamCalled := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

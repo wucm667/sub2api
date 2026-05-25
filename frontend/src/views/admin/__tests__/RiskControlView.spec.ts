@@ -4,7 +4,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import type { DOMWrapper, VueWrapper } from '@vue/test-utils'
 
 import RiskControlView from '../RiskControlView.vue'
-import type { ContentModerationConfig, UpdateContentModerationConfig } from '@/api/admin/riskControl'
+import type { ContentModerationConfig, ContentModerationRuntimeStatus, UpdateContentModerationConfig } from '@/api/admin/riskControl'
 
 const {
   getConfig,
@@ -99,7 +99,7 @@ const baseConfig = (): ContentModerationConfig => ({
   },
 })
 
-const runtimeStatus = () => ({
+const runtimeStatus = (overrides: Partial<ContentModerationRuntimeStatus> = {}): ContentModerationRuntimeStatus => ({
   enabled: true,
   risk_control_enabled: true,
   mode: 'pre_block',
@@ -113,11 +113,16 @@ const runtimeStatus = () => ({
   enqueued: 0,
   dropped: 0,
   processed: 0,
+  async_processed: 0,
+  sync_processed: 0,
+  sync_blocked: 0,
+  sync_passed: 0,
   errors: 0,
   api_key_statuses: [],
   flagged_hash_count: 0,
   last_cleanup_deleted_hit: 0,
   last_cleanup_deleted_non_hit: 0,
+  ...overrides,
 })
 
 const AppLayoutStub = { template: '<div><slot /></div>' }
@@ -223,5 +228,42 @@ describe('admin RiskControlView', () => {
       },
     }))
     expect(showError).not.toHaveBeenCalled()
+  })
+
+  it('shows sync counters and reads async processed separately in pre-block mode', async () => {
+    getStatus.mockResolvedValue(runtimeStatus({
+      processed: 99,
+      async_processed: 7,
+      sync_processed: 3,
+      sync_blocked: 2,
+      sync_passed: 1,
+    }))
+
+    const wrapper = mount(RiskControlView, {
+      global: {
+        stubs: {
+          AppLayout: AppLayoutStub,
+          BaseDialog: BaseDialogStub,
+          Icon: true,
+          Select: true,
+          Toggle: true,
+          Pagination: true,
+          ModelWhitelistSelector: ModelWhitelistSelectorStub,
+        },
+      },
+    })
+
+    await flushPromises()
+
+    const text = wrapper.text()
+    expect(text).toContain('admin.riskControl.asyncProcessed')
+    expect(text).toContain('admin.riskControl.syncProcessed')
+    expect(text).toContain('admin.riskControl.syncBlocked')
+    expect(text).toContain('admin.riskControl.syncPassed')
+    expect(text).toContain('7')
+    expect(text).toContain('3')
+    expect(text).toContain('2')
+    expect(text).toContain('1')
+    expect(text).not.toContain('99')
   })
 })

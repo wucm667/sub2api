@@ -129,6 +129,10 @@ export interface ContentModerationRuntimeStatus {
   enqueued: number
   dropped: number
   processed: number
+  async_processed: number
+  sync_processed: number
+  sync_blocked: number
+  sync_passed: number
   errors: number
   api_key_statuses: ContentModerationAPIKeyStatus[]
   flagged_hash_count: number
