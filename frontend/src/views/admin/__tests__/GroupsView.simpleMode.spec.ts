@@ -5,6 +5,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 const {
   isSimpleModeRef,
   listGroupsMock,
+  getModelsListCandidatesMock,
   getUsageSummaryMock,
   getCapacitySummaryMock,
   createGroupMock,
@@ -13,6 +14,7 @@ const {
 } = vi.hoisted(() => ({
   isSimpleModeRef: { value: true },
   listGroupsMock: vi.fn(),
+  getModelsListCandidatesMock: vi.fn(),
   getUsageSummaryMock: vi.fn(),
   getCapacitySummaryMock: vi.fn(),
   createGroupMock: vi.fn(),
@@ -46,6 +48,7 @@ vi.mock('@/api/admin', () => ({
   adminAPI: {
     groups: {
       list: listGroupsMock,
+      getModelsListCandidates: getModelsListCandidatesMock,
       getUsageSummary: getUsageSummaryMock,
       getCapacitySummary: getCapacitySummaryMock,
       create: createGroupMock,
@@ -146,6 +149,7 @@ describe('GroupsView simple mode', () => {
   beforeEach(() => {
     isSimpleModeRef.value = true
     listGroupsMock.mockReset().mockResolvedValue({ items: [], total: 0, pages: 0 })
+    getModelsListCandidatesMock.mockReset().mockResolvedValue([])
     getUsageSummaryMock.mockReset().mockResolvedValue([])
     getCapacitySummaryMock.mockReset().mockResolvedValue([])
     createGroupMock.mockReset().mockResolvedValue({})
@@ -161,6 +165,7 @@ describe('GroupsView simple mode', () => {
     expect(wrapper.get('[data-testid="columns"]').text()).not.toContain('rate_multiplier')
     expect(getUsageSummaryMock).not.toHaveBeenCalled()
     expect(getCapacitySummaryMock).not.toHaveBeenCalled()
+    expect(getModelsListCandidatesMock).not.toHaveBeenCalled()
 
     await wrapper.get('[data-tour="groups-create-btn"]').trigger('click')
     await nextTick()
@@ -181,6 +186,7 @@ describe('GroupsView simple mode', () => {
     expect(wrapper.get('[data-testid="columns"]').text()).toContain('rate_multiplier')
     expect(getUsageSummaryMock).toHaveBeenCalledTimes(1)
     expect(getCapacitySummaryMock).toHaveBeenCalledTimes(1)
+    expect(getModelsListCandidatesMock).toHaveBeenCalledTimes(1)
 
     await wrapper.get('[data-tour="groups-create-btn"]').trigger('click')
     await nextTick()
