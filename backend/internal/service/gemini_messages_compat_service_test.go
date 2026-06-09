@@ -322,6 +322,133 @@ func TestConvertClaudeToolsToGeminiTools_PreservesWebSearchAlongsideFunctions(t 
 	require.Empty(t, googleSearch)
 }
 
+func TestCleanToolSchema(t *testing.T) {
+	t.Run("collapses nullable type union", func(t *testing.T) {
+		schema := map[string]any{
+			"type": []any{"string", "null"},
+		}
+
+		require.Equal(t, map[string]any{
+			"type":     "STRING",
+			"nullable": true,
+		}, cleanToolSchema(schema))
+	})
+
+	t.Run("inlines root ref and removes defs", func(t *testing.T) {
+		schema := map[string]any{
+			"$ref": "#/$defs/Person",
+			"$defs": map[string]any{
+				"Person": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"name": map[string]any{"type": "string"},
+					},
+				},
+			},
+		}
+
+		require.Equal(t, map[string]any{
+			"type": "OBJECT",
+			"properties": map[string]any{
+				"name": map[string]any{"type": "STRING"},
+			},
+		}, cleanToolSchema(schema))
+	})
+
+	t.Run("cleans nested unions and refs", func(t *testing.T) {
+		schema := map[string]any{
+			"type": "object",
+			"definitions": map[string]any{
+				"Identifier": map[string]any{
+					"type":        []any{"integer", "null"},
+					"description": "Resource identifier",
+				},
+			},
+			"properties": map[string]any{
+				"label": map[string]any{
+					"type": []any{"string", "null"},
+				},
+				"id": map[string]any{
+					"$ref": "#/definitions/Identifier",
+				},
+			},
+		}
+
+		require.Equal(t, map[string]any{
+			"type": "OBJECT",
+			"properties": map[string]any{
+				"label": map[string]any{
+					"type":     "STRING",
+					"nullable": true,
+				},
+				"id": map[string]any{
+					"type":        "INTEGER",
+					"nullable":    true,
+					"description": "Resource identifier",
+				},
+			},
+		}, cleanToolSchema(schema))
+	})
+
+	t.Run("preserves existing cleanup behavior", func(t *testing.T) {
+		schema := map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"properties": map[string]any{
+				"name": map[string]any{
+					"type":        "string",
+					"description": "Display name",
+				},
+			},
+			"required": []any{"name"},
+		}
+
+		require.Equal(t, map[string]any{
+			"type": "OBJECT",
+			"properties": map[string]any{
+				"name": map[string]any{
+					"type":        "STRING",
+					"description": "Display name",
+				},
+			},
+			"required": []any{"name"},
+		}, cleanToolSchema(schema))
+	})
+
+	t.Run("breaks circular refs", func(t *testing.T) {
+		schema := map[string]any{
+			"type": "object",
+			"$defs": map[string]any{
+				"Node": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"next": map[string]any{"$ref": "#/$defs/Node"},
+					},
+				},
+			},
+			"properties": map[string]any{
+				"root": map[string]any{"$ref": "#/$defs/Node"},
+			},
+		}
+
+		var cleaned any
+		require.NotPanics(t, func() {
+			cleaned = cleanToolSchema(schema)
+		})
+		require.Equal(t, map[string]any{
+			"type": "OBJECT",
+			"properties": map[string]any{
+				"root": map[string]any{
+					"type": "OBJECT",
+					"properties": map[string]any{
+						"next": map[string]any{},
+					},
+				},
+			},
+		}, cleaned)
+	})
+}
+
 func TestGeminiHandleNativeNonStreamingResponse_DebugDisabledDoesNotEmitHeaderLogs(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	logSink, restore := captureStructuredLog(t)

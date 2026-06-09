@@ -3399,39 +3399,122 @@ func isClaudeWebSearchToolMap(tool map[string]any) bool {
 	}
 }
 
+const maxCleanToolSchemaDepth = 100
+
 // cleanToolSchema 清理工具的 JSON Schema，移除 Gemini 不支持的字段
 func cleanToolSchema(schema any) any {
+	defs := extractToolSchemaDefinitions(schema)
+	return cleanToolSchemaRecursive(schema, defs, make(map[string]bool), 0)
+}
+
+func extractToolSchemaDefinitions(schema any) map[string]any {
+	root, ok := schema.(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	defs := make(map[string]any)
+	for _, key := range []string{"$defs", "definitions"} {
+		if definitions, ok := root[key].(map[string]any); ok {
+			for name, definition := range definitions {
+				defs[name] = definition
+			}
+		}
+	}
+	return defs
+}
+
+func cleanToolSchemaRecursive(schema any, defs map[string]any, activeRefs map[string]bool, depth int) any {
 	if schema == nil {
+		return nil
+	}
+	if depth >= maxCleanToolSchemaDepth {
 		return nil
 	}
 
 	switch v := schema.(type) {
 	case map[string]any:
-		cleaned := make(map[string]any)
+		cleaned := make(map[string]any, len(v))
+		if ref, ok := v["$ref"].(string); ok {
+			if refName, ok := toolSchemaRefName(ref); ok && !activeRefs[refName] {
+				if definition, exists := defs[refName]; exists {
+					activeRefs[refName] = true
+					expanded := cleanToolSchemaRecursive(definition, defs, activeRefs, depth+1)
+					delete(activeRefs, refName)
+					if expandedMap, ok := expanded.(map[string]any); ok {
+						for key, value := range expandedMap {
+							cleaned[key] = value
+						}
+					}
+				}
+			}
+		}
+
 		for key, value := range v {
 			// 跳过不支持的字段
 			if key == "$schema" || key == "$id" || key == "$ref" ||
+				key == "$defs" || key == "definitions" ||
 				key == "additionalProperties" || key == "patternProperties" || key == "minLength" ||
 				key == "maxLength" || key == "minItems" || key == "maxItems" {
 				continue
 			}
 			// 递归清理嵌套对象
-			cleaned[key] = cleanToolSchema(value)
+			cleaned[key] = cleanToolSchemaRecursive(value, defs, activeRefs, depth+1)
 		}
-		// 规范化 type 字段为大写
-		if typeVal, ok := cleaned["type"].(string); ok {
+
+		switch typeVal := cleaned["type"].(type) {
+		case string:
 			cleaned["type"] = strings.ToUpper(typeVal)
+		case []any:
+			selectedType := ""
+			nullable := false
+			for _, item := range typeVal {
+				itemType, ok := item.(string)
+				if !ok {
+					continue
+				}
+				if strings.EqualFold(itemType, "null") {
+					nullable = true
+					continue
+				}
+				if selectedType == "" {
+					selectedType = itemType
+				}
+			}
+			if selectedType == "" && nullable {
+				selectedType = "string"
+			}
+			if selectedType == "" {
+				delete(cleaned, "type")
+			} else {
+				cleaned["type"] = strings.ToUpper(selectedType)
+			}
+			if nullable {
+				cleaned["nullable"] = true
+			}
 		}
 		return cleaned
 	case []any:
 		cleaned := make([]any, len(v))
 		for i, item := range v {
-			cleaned[i] = cleanToolSchema(item)
+			cleaned[i] = cleanToolSchemaRecursive(item, defs, activeRefs, depth+1)
 		}
 		return cleaned
 	default:
 		return v
 	}
+}
+
+func toolSchemaRefName(ref string) (string, bool) {
+	for _, prefix := range []string{"#/$defs/", "#/definitions/"} {
+		if strings.HasPrefix(ref, prefix) {
+			name := strings.TrimPrefix(ref, prefix)
+			if name != "" && !strings.Contains(name, "/") {
+				return strings.ReplaceAll(strings.ReplaceAll(name, "~1", "/"), "~0", "~"), true
+			}
+		}
+	}
+	return "", false
 }
 
 func convertClaudeGenerationConfig(req map[string]any) map[string]any {
