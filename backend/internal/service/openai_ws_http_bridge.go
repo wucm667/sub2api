@@ -63,6 +63,20 @@ func (s *OpenAIGatewayService) shouldBridgeOpenAIWSHTTP(account *Account, payloa
 	return threshold > 0 && int64(payloadBytes) >= threshold
 }
 
+func (s *OpenAIGatewayService) shouldBridgeOpenAIWSPassthroughFirstMessage(account *Account, payload []byte) bool {
+	if !gjson.ValidBytes(payload) || !gjson.ParseBytes(payload).IsObject() {
+		return false
+	}
+	eventType := gjson.GetBytes(payload, "type")
+	if eventType.Exists() {
+		if eventType.Type != gjson.String || eventType.String() != "response.create" {
+			return false
+		}
+	}
+	previousResponseID := strings.TrimSpace(gjson.GetBytes(payload, "previous_response_id").String())
+	return s.shouldBridgeOpenAIWSHTTP(account, len(payload), previousResponseID)
+}
+
 func prepareOpenAIWSHTTPBridgeBody(payload []byte) ([]byte, error) {
 	var body map[string]any
 	if err := json.Unmarshal(payload, &body); err != nil {
