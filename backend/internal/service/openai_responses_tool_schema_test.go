@@ -62,6 +62,153 @@ func TestSanitizeOpenAIResponsesToolParameterTypes_MissingTypeNotInvented(t *tes
 	require.False(t, gjson.GetBytes(sanitized, "tools.0.parameters.type").Exists())
 }
 
+func TestSanitizeOpenAIResponsesToolParameterTypes_AutomationUpdateRootUnions(t *testing.T) {
+	cases := []struct {
+		name, body, path string
+		fallback         bool
+	}{
+		{"exact oneOf", `{"tools":[{"type":"function","name":"automation_update","strict":true,"parameters":{"oneOf":[{"type":"object"},{"type":"object"}]}}]}`, "tools.0", false},
+		{"double underscore anyOf", `{"tools":[{"type":"function","name":"codex_app__automation_update","strict":true,"parameters":{"anyOf":[{"type":"object"},{"type":"string"}]}}]}`, "tools.0", true},
+		{"dotted anyOf", `{"tools":[{"type":"function","name":"codex_app.automation_update","parameters":{"anyOf":[{"type":"string"},{"type":"null"}]}}]}`, "tools.0", true},
+		{"nested namespace history", `{"input":[{"tools":[{"type":"namespace","name":"codex_app","tools":[{"type":"function","name":"automation_update","strict":true,"parameters":{"oneOf":[{"type":"object"},{"type":"integer"}]}}]}]}]}`, "input.0.tools.0.tools.0", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, changed, err := sanitizeOpenAIResponsesToolParameterTypes([]byte(tc.body))
+			require.NoError(t, err)
+			require.True(t, changed)
+			tool := gjson.GetBytes(out, tc.path)
+			require.Equal(t, "object", tool.Get("parameters.type").String())
+			if tc.fallback {
+				require.False(t, tool.Get("strict").Bool())
+				require.True(t, tool.Get("parameters.additionalProperties").Bool())
+				require.False(t, tool.Get("parameters.oneOf").Exists())
+				require.False(t, tool.Get("parameters.anyOf").Exists())
+			} else {
+				require.True(t, tool.Get("strict").Bool())
+				require.True(t, tool.Get("parameters.oneOf").IsArray())
+			}
+		})
+	}
+}
+
+func TestSanitizeOpenAIResponsesToolParameterTypes_BothRootUnionKeywords(t *testing.T) {
+	cases := []struct {
+		name     string
+		oneOf    string
+		anyOf    string
+		fallback bool
+	}{
+		{"both all object", `[{"type":"object"}]`, `[{"type":"object"},{"type":"object"}]`, false},
+		{"oneOf object anyOf mixed", `[{"type":"object"}]`, `[{"type":"object"},{"type":"string"}]`, true},
+		{"oneOf mixed anyOf object", `[{"type":"string"}]`, `[{"type":"object"}]`, true},
+		{"oneOf object anyOf empty", `[{"type":"object"}]`, `[]`, true},
+		{"oneOf object anyOf non-array", `[{"type":"object"}]`, `{"type":"object"}`, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := []byte(`{"tools":[{"type":"function","name":"automation_update","strict":true,"parameters":{"oneOf":` + tc.oneOf + `,"anyOf":` + tc.anyOf + `}}]}`)
+			out, changed, err := sanitizeOpenAIResponsesToolParameterTypes(body)
+			require.NoError(t, err)
+			require.True(t, changed)
+			tool := gjson.GetBytes(out, "tools.0")
+			require.Equal(t, "object", tool.Get("parameters.type").String())
+			if tc.fallback {
+				require.False(t, tool.Get("strict").Bool())
+				require.True(t, tool.Get("parameters.additionalProperties").Bool())
+				require.False(t, tool.Get("parameters.oneOf").Exists())
+				require.False(t, tool.Get("parameters.anyOf").Exists())
+			} else {
+				require.True(t, tool.Get("strict").Bool())
+				require.True(t, tool.Get("parameters.oneOf").IsArray())
+				require.True(t, tool.Get("parameters.anyOf").IsArray())
+			}
+		})
+	}
+}
+
+func TestSanitizeOpenAIResponsesToolParameterTypes_UnrelatedMissingTypeUnionUntouched(t *testing.T) {
+	body := []byte(`{"tools":[{"type":"function","name":"ordinary","strict":true,"parameters":{"oneOf":[{"type":"object"},{"type":"string"}]}}]}`)
+	out, changed, err := sanitizeOpenAIResponsesToolParameterTypes(body)
+	require.NoError(t, err)
+	require.False(t, changed)
+	require.Equal(t, body, out)
+}
+
+func TestSanitizeOpenAIResponsesToolParameterTypes_FallbackRepairsNestedTools(t *testing.T) {
+	body := []byte(`{"tools":[{"type":"function","name":"automation_update","strict":true,"parameters":{"oneOf":[{"type":"object"},{"type":"string"}]},"tools":[{"type":"function","name":"nested","parameters":{"type":null}}]}]}`)
+
+	out, changed, err := sanitizeOpenAIResponsesToolParameterTypes(body)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.True(t, json.Valid(out))
+	require.Equal(t, "object", gjson.GetBytes(out, "tools.0.parameters.type").String())
+	require.True(t, gjson.GetBytes(out, "tools.0.parameters.additionalProperties").Bool())
+	require.False(t, gjson.GetBytes(out, "tools.0.strict").Bool())
+	require.Equal(t, "object", gjson.GetBytes(out, "tools.0.tools.0.parameters.type").String())
+}
+
+func TestSanitizeOpenAIResponsesToolParameterTypes_FallbackRepairsFunctionParameters(t *testing.T) {
+	body := []byte(`{"tools":[{"type":"function","name":"automation_update","strict":true,"parameters":{"anyOf":[{"type":"object"},{"type":"integer"}]},"function":{"name":"alternate","parameters":{"type":null}}}]}`)
+
+	out, changed, err := sanitizeOpenAIResponsesToolParameterTypes(body)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.True(t, json.Valid(out))
+	require.Equal(t, "object", gjson.GetBytes(out, "tools.0.parameters.type").String())
+	require.True(t, gjson.GetBytes(out, "tools.0.parameters.additionalProperties").Bool())
+	require.False(t, gjson.GetBytes(out, "tools.0.strict").Bool())
+	require.Equal(t, "object", gjson.GetBytes(out, "tools.0.function.parameters.type").String())
+}
+
+func TestSanitizeOpenAIResponsesToolParameterTypes_FunctionParametersFallbackDisablesFunctionStrict(t *testing.T) {
+	body := []byte(`{"tools":[{"type":"function","function":{"name":"automation_update","strict":true,"parameters":{"oneOf":[{"type":"object"},{"type":"string"}]}}}]}`)
+
+	out, changed, err := sanitizeOpenAIResponsesToolParameterTypes(body)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.True(t, json.Valid(out))
+	require.Equal(t, "false", gjson.GetBytes(out, "tools.0.function.strict").Raw)
+	require.False(t, gjson.GetBytes(out, "tools.0.strict").Exists())
+	require.Equal(t, "object", gjson.GetBytes(out, "tools.0.function.parameters.type").String())
+	require.True(t, gjson.GetBytes(out, "tools.0.function.parameters.additionalProperties").Bool())
+	require.False(t, gjson.GetBytes(out, "tools.0.function.parameters.oneOf").Exists())
+}
+
+func TestSanitizeOpenAIResponsesToolParameterTypes_FallbackPreservesDepthGuard(t *testing.T) {
+	tool := map[string]any{
+		"type":       "function",
+		"name":       "automation_update",
+		"strict":     true,
+		"parameters": map[string]any{"oneOf": []any{map[string]any{"type": "string"}}},
+	}
+	for i := 0; i < 12; i++ {
+		tool = map[string]any{
+			"type":       "function",
+			"name":       "automation_update",
+			"strict":     true,
+			"parameters": map[string]any{"oneOf": []any{map[string]any{"type": "string"}}},
+			"tools":      []any{tool},
+		}
+	}
+	body, err := json.Marshal(map[string]any{"tools": []any{tool}})
+	require.NoError(t, err)
+
+	out, changed, err := sanitizeOpenAIResponsesToolParameterTypes(body)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.True(t, json.Valid(out))
+
+	path := "tools.0"
+	for depth := 0; depth <= openAIResponsesToolSchemaMaxDepth; depth++ {
+		require.False(t, gjson.GetBytes(out, path+".strict").Bool(), "depth %d should be repaired", depth)
+		path += ".tools.0"
+	}
+	require.True(t, gjson.GetBytes(out, path+".strict").Bool(), "tool beyond depth guard must remain untouched")
+	require.False(t, gjson.GetBytes(out, path+".parameters.type").Exists())
+	require.True(t, gjson.GetBytes(out, path+".parameters.oneOf").IsArray())
+}
+
 // 多轮历史：工具定义沉进 input 后，upstream 报错路径形如
 // input[N].tools[i].tools[j].parameters，两层都要修。
 func TestSanitizeOpenAIResponsesToolParameterTypes_NestedHistoryTools(t *testing.T) {
