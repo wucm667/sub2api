@@ -42,20 +42,20 @@ type openAIResponsesToolSchemaNullType struct {
 // 都会重扫并全量拷贝整个文档，命中 N 处就是 N 次全量拷贝，而 /v1/responses 的
 // body 上限是 gateway.max_body_size（默认 256MB），构造请求能塞进百万级命中。
 func sanitizeOpenAIResponsesToolParameterTypes(body []byte) ([]byte, bool, error) {
-	return sanitizeOpenAIResponsesToolParameterTypesAtDepth(body, 0, "")
+	return sanitizeOpenAIResponsesToolParameterTypesAtDepth(body, 0)
 }
 
-func sanitizeOpenAIResponsesToolParameterTypesAtDepth(body []byte, depth int, namespace string) ([]byte, bool, error) {
+func sanitizeOpenAIResponsesToolParameterTypesAtDepth(body []byte, depth int) ([]byte, bool, error) {
 	if len(body) == 0 {
 		return body, false, nil
 	}
 
 	hits := make([]openAIResponsesToolSchemaNullType, 0, 2)
-	collectOpenAIResponsesToolSchemaNullTypes(body, gjson.GetBytes(body, "tools"), depth, namespace, &hits)
+	collectOpenAIResponsesToolSchemaNullTypes(body, gjson.GetBytes(body, "tools"), depth, &hits)
 	if input := gjson.GetBytes(body, "input"); input.IsArray() {
 		input.ForEach(func(_, item gjson.Result) bool {
 			if item.IsObject() {
-				collectOpenAIResponsesToolSchemaNullTypes(body, item.Get("tools"), depth, namespace, &hits)
+				collectOpenAIResponsesToolSchemaNullTypes(body, item.Get("tools"), depth, &hits)
 			}
 			return true
 		})
@@ -86,7 +86,7 @@ func sanitizeOpenAIResponsesToolParameterTypesAtDepth(body []byte, depth int, na
 // Schema 位置。显式 null 不按 tool type 过滤；缺失根 type 的 union 仅识别已知的
 // automation_update 名称。
 func collectOpenAIResponsesToolSchemaNullTypes(
-	body []byte, tools gjson.Result, depth int, namespace string, hits *[]openAIResponsesToolSchemaNullType,
+	body []byte, tools gjson.Result, depth int, hits *[]openAIResponsesToolSchemaNullType,
 ) {
 	if depth > openAIResponsesToolSchemaMaxDepth || !tools.IsArray() {
 		return
@@ -95,10 +95,7 @@ func collectOpenAIResponsesToolSchemaNullTypes(
 		if !tool.IsObject() {
 			return true
 		}
-		toolNamespace := namespace
-		if tool.Get("type").String() == "namespace" {
-			toolNamespace = tool.Get("name").String()
-		}
+		fallbackCoveredTool := false
 		// Responses 形态用顶层 parameters，ChatCompletions 形态用 function.parameters，
 		// 两种都可能出现在 Responses 请求里（见 normalizeCodexTools）。
 		for _, suffix := range []string{"parameters", "function.parameters"} {
@@ -116,20 +113,24 @@ func collectOpenAIResponsesToolSchemaNullTypes(
 			if suffix == "function.parameters" {
 				name = tool.Get("function.name").String()
 			}
-			if !params.Get("type").Exists() && isAutomationUpdateTool(name, namespace) {
+			if !params.Get("type").Exists() && isAutomationUpdateTool(name) {
 				hasUnion, allObject := openAIResponsesUnionsHaveObjectRoot(params)
 				if hasUnion {
 					if allObject {
 						appendOpenAIResponsesToolSchemaEdit(body, params, insertObjectType(params.Raw), hits)
 					} else {
-						appendOpenAIResponsesToolSchemaEdit(body, tool, fallbackAutomationUpdateTool(tool, params, suffix, depth, namespace), hits)
+						appendOpenAIResponsesToolSchemaEdit(body, tool, fallbackAutomationUpdateTool(tool, params, suffix, depth), hits)
+						fallbackCoveredTool = true
+						break
 					}
 				}
 			}
 		}
 		// 历史输入里的工具定义会再嵌套一层 tools（upstream 报错路径形如
 		// input[234].tools[0].tools[3].parameters）。
-		collectOpenAIResponsesToolSchemaNullTypes(body, tool.Get("tools"), depth+1, toolNamespace, hits)
+		if !fallbackCoveredTool {
+			collectOpenAIResponsesToolSchemaNullTypes(body, tool.Get("tools"), depth+1, hits)
+		}
 		return true
 	})
 }
@@ -151,9 +152,9 @@ func appendOpenAIResponsesToolSchemaEdit(
 	*hits = append(*hits, openAIResponsesToolSchemaNullType{offset: value.Index, length: len(value.Raw), replacement: replacement})
 }
 
-func isAutomationUpdateTool(name, namespace string) bool {
+func isAutomationUpdateTool(name string) bool {
 	return name == "automation_update" || name == "codex_app__automation_update" ||
-		name == "codex_app.automation_update" || (namespace == "codex_app" && name == "automation_update")
+		name == "codex_app.automation_update"
 }
 
 func openAIResponsesUnionsHaveObjectRoot(params gjson.Result) (bool, bool) {
@@ -192,8 +193,8 @@ func insertStrictFalse(raw string) string {
 	return `{"strict":false,` + strings.TrimPrefix(raw, "{")
 }
 
-func fallbackAutomationUpdateTool(tool, params gjson.Result, paramsPath string, depth int, namespace string) string {
-	const fallback = `{"type":"object","additionalProperties":true}`
+func fallbackAutomationUpdateTool(tool, params gjson.Result, paramsPath string, depth int) string {
+	const fallback = `{"type":"object","properties":{},"additionalProperties":true}`
 	start := params.Index - tool.Index
 	raw := tool.Raw[:start] + fallback + tool.Raw[start+len(params.Raw):]
 	strictPath := "strict"
@@ -206,7 +207,7 @@ func fallbackAutomationUpdateTool(tool, params gjson.Result, paramsPath string, 
 	// the original body would overlap it and be skipped by the final splice. Repair
 	// the replacement itself to preserve nested tools and function.parameters fixes.
 	wrapper := []byte(`{"tools":[` + raw + `]}`)
-	sanitized, changed, _ := sanitizeOpenAIResponsesToolParameterTypesAtDepth(wrapper, depth, namespace)
+	sanitized, changed, _ := sanitizeOpenAIResponsesToolParameterTypesAtDepth(wrapper, depth)
 	if !changed {
 		return raw
 	}

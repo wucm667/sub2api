@@ -135,6 +135,50 @@ func TestSanitizeOpenAIResponsesToolParameterTypes_UnrelatedMissingTypeUnionUnto
 	require.Equal(t, body, out)
 }
 
+func TestSanitizeOpenAIResponsesToolParameterTypes_AutomationUpdateNameCompatibility(t *testing.T) {
+	cases := []struct {
+		name, toolName string
+		changed        bool
+	}{
+		{"bare", "automation_update", true},
+		{"double underscore", "codex_app__automation_update", true},
+		{"dotted", "codex_app.automation_update", true},
+		{"prefixed unrelated", "other__automation_update", false},
+		{"suffixed unrelated", "automation_update_preview", false},
+		{"namespace only", "codex_app", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := []byte("{\"tools\":[{\"type\":\"function\",\"name\":\"" + tc.toolName + "\",\"strict\":true,\"parameters\":{\"oneOf\":[{\"type\":\"string\"}]}}]}")
+			out, changed, err := sanitizeOpenAIResponsesToolParameterTypes(body)
+			require.NoError(t, err)
+			require.Equal(t, tc.changed, changed)
+			if tc.changed {
+				require.Equal(t, "object", gjson.GetBytes(out, "tools.0.parameters.type").String())
+				require.False(t, gjson.GetBytes(out, "tools.0.strict").Bool())
+			} else {
+				require.Equal(t, body, out)
+			}
+		})
+	}
+}
+
+// issue #5820 的真实根形状：四个 oneOf 分支，其中嵌套 oneOf 分支没有字面量根 type。
+func TestSanitizeOpenAIResponsesToolParameterTypes_Issue5820RootOneOfFixture(t *testing.T) {
+	body := []byte(`{"tools":[{"type":"function","name":"automation_update","strict":true,"parameters":{"oneOf":[{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]},{"oneOf":[{"type":"object"},{"type":"null"}]},{"type":"object","properties":{"enabled":{"type":"boolean"}}},{"oneOf":[{"type":"object"},{"type":"string"}]}],"$defs":{"schedule":{"type":"object"}},"required":["id"]}}]}`)
+
+	out, changed, err := sanitizeOpenAIResponsesToolParameterTypes(body)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.True(t, json.Valid(out))
+	tool := gjson.GetBytes(out, "tools.0")
+	require.Equal(t, "false", tool.Get("strict").Raw)
+	require.JSONEq(t, `{"type":"object","properties":{},"additionalProperties":true}`, tool.Get("parameters").Raw)
+	require.False(t, tool.Get("parameters.oneOf").Exists())
+	require.False(t, tool.Get("parameters.$defs").Exists())
+	require.False(t, tool.Get("parameters.required").Exists())
+}
+
 func TestSanitizeOpenAIResponsesToolParameterTypes_FallbackRepairsNestedTools(t *testing.T) {
 	body := []byte(`{"tools":[{"type":"function","name":"automation_update","strict":true,"parameters":{"oneOf":[{"type":"object"},{"type":"string"}]},"tools":[{"type":"function","name":"nested","parameters":{"type":null}}]}]}`)
 
@@ -207,6 +251,44 @@ func TestSanitizeOpenAIResponsesToolParameterTypes_FallbackPreservesDepthGuard(t
 	require.True(t, gjson.GetBytes(out, path+".strict").Bool(), "tool beyond depth guard must remain untouched")
 	require.False(t, gjson.GetBytes(out, path+".parameters.type").Exists())
 	require.True(t, gjson.GetBytes(out, path+".parameters.oneOf").IsArray())
+}
+
+func buildNestedFallbackToolSchemaBody(t *testing.T, depth int) []byte {
+	t.Helper()
+	tool := map[string]any{"type": "function", "name": "leaf", "parameters": map[string]any{"type": nil}}
+	for i := 0; i < depth; i++ {
+		tool = map[string]any{
+			"type": "function", "name": "automation_update", "strict": true,
+			"parameters": map[string]any{"oneOf": []any{map[string]any{"type": "string"}}},
+			"function":   map[string]any{"name": "ordinary", "parameters": map[string]any{"type": nil}},
+			"tools":      []any{tool},
+		}
+	}
+	body, err := json.Marshal(map[string]any{"tools": []any{tool}})
+	require.NoError(t, err)
+	return body
+}
+
+// Whole-tool fallback owns its complete subtree. Added depth must not cause the outer collector
+// to revisit descendants that fallback has already repaired.
+func TestSanitizeOpenAIResponsesToolParameterTypes_FallbackDepthAllocationIsLinear(t *testing.T) {
+	shallow := buildNestedFallbackToolSchemaBody(t, 1)
+	deep := buildNestedFallbackToolSchemaBody(t, openAIResponsesToolSchemaMaxDepth+1)
+	shallowAllocs := testing.AllocsPerRun(20, func() { _, _, _ = sanitizeOpenAIResponsesToolParameterTypes(shallow) })
+	deepAllocs := testing.AllocsPerRun(20, func() { _, _, _ = sanitizeOpenAIResponsesToolParameterTypes(deep) })
+	require.Less(t, deepAllocs, shallowAllocs*4,
+		"fallback subtree traversal is amplified by depth (shallow=%v deep=%v)", shallowAllocs, deepAllocs)
+
+	out, changed, err := sanitizeOpenAIResponsesToolParameterTypes(deep)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.True(t, json.Valid(out))
+	path := "tools.0"
+	for depth := 0; depth <= openAIResponsesToolSchemaMaxDepth; depth++ {
+		require.Equal(t, "object", gjson.GetBytes(out, path+".parameters.type").String())
+		require.Equal(t, "object", gjson.GetBytes(out, path+".function.parameters.type").String())
+		path += ".tools.0"
+	}
 }
 
 // 多轮历史：工具定义沉进 input 后，upstream 报错路径形如
