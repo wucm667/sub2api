@@ -78,6 +78,8 @@ func TestGroupUsageRollupTriggerSerializesLateHistoricalInsertWithPublish(t *tes
 
 	lateTx := beginGroupUsageRollupTriggerTestTx(t, ctx, schema)
 	defer func() { _ = lateTx.Rollback() }()
+	_, err = lateTx.ExecContext(ctx, "SET LOCAL TIME ZONE 'Asia/Shanghai'")
+	require.NoError(t, err)
 	var lateBackendPID int
 	require.NoError(t, lateTx.QueryRowContext(ctx, "SELECT pg_backend_pid()").Scan(&lateBackendPID))
 
@@ -151,6 +153,8 @@ func TestGroupUsageRollupTriggerSerializesInsertTransactionAcrossMidnight(t *tes
 
 	insertTx := beginGroupUsageRollupTriggerTestTx(t, ctx, schema)
 	defer func() { _ = insertTx.Rollback() }()
+	_, err = insertTx.ExecContext(ctx, "SET LOCAL TIME ZONE 'Asia/Shanghai'")
+	require.NoError(t, err)
 	var insertBackendPID int
 	require.NoError(t, insertTx.QueryRowContext(ctx, "SELECT pg_backend_pid()").Scan(&insertBackendPID))
 
@@ -207,6 +211,7 @@ func TestGroupUsageRollupTriggerKeepsWatermarkForTodayInsert(t *testing.T) {
 	tx := beginGroupUsageRollupTriggerTestTx(t, ctx, schema)
 	defer func() { _ = tx.Rollback() }()
 	_, err := tx.ExecContext(ctx, `
+		SET LOCAL TIME ZONE 'Asia/Shanghai';
 		INSERT INTO groups (id) VALUES (10);
 		INSERT INTO users (id) VALUES (1);
 		UPDATE usage_group_rollup_state
