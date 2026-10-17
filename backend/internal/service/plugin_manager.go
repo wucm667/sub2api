@@ -35,7 +35,8 @@ const (
 type pluginRoute struct {
 	pluginID       int64
 	runtime        *pluginRuntime
-	rolloutPercent int
+	rollouts       map[string]int
+	rolloutPercent int // legacy OpenAI route field retained for in-process compatibility
 	unavailable    string
 }
 
@@ -189,7 +190,7 @@ func (m *PluginManager) Install(ctx context.Context, reader io.Reader, installed
 	}
 	var previous *PluginInstallation
 	if existing, getErr := m.repo.GetByKey(ctx, packageInfo.PluginKey); getErr == nil {
-		if existing.State == PluginStateEnabled || hasEnabledOpenAIBinding(existing.Bindings) {
+		if existing.State == PluginStateEnabled || hasEnabledPluginBinding(existing.Bindings) {
 			cleanupErr := m.cleanupInstallationFiles(packageInfo)
 			return nil, errors.Join(errors.New("请先停用当前插件，再上传同 ID 的新版本"), cleanupErr)
 		}
@@ -271,18 +272,21 @@ func (m *PluginManager) reconcileOnce(ctx context.Context) error {
 	installations, err := m.repo.List(ctx)
 	if err != nil {
 		// 无法读取权威绑定状态时不能假设插件未启用，否则会把 OAuth 请求静默回落到旧直连路径。
-		m.publishUnavailableRoute(0, 100, "插件启用状态暂时无法读取")
+		m.publishUnavailableRoute(0, map[string]int{
+			PluginCapabilityOpenAIOAuthOutbound: 100,
+			PluginCapabilityAnthropicOAuthPatch: 100,
+		}, "插件启用状态暂时无法读取")
 		return fmt.Errorf("读取插件启用状态: %w", err)
 	}
 	m.cleanupStaleLocalInstallations(installations)
 	var enabled *PluginInstallation
 	for _, installation := range installations {
-		if !hasEnabledOpenAIBinding(installation.Bindings) {
+		if !hasEnabledPluginBinding(installation.Bindings) {
 			continue
 		}
 		if enabled != nil {
-			err := errors.New("检测到多个 OpenAI OAuth 出站插件同时启用")
-			m.publishUnavailableRoute(enabled.ID, 100, err.Error())
+			err := errors.New("检测到多个插件能力同时启用")
+			m.publishUnavailableRoute(enabled.ID, bindingRollouts(enabled.Bindings), err.Error())
 			return err
 		}
 		enabled = installation
@@ -306,10 +310,10 @@ func (m *PluginManager) reconcileOnce(ctx context.Context) error {
 		return nil
 	}
 
-	rollout := bindingRollout(enabled.Bindings)
+	rollouts := bindingRollouts(enabled.Bindings)
 	current := m.route.Load()
 	if current != nil && current.pluginID == enabled.ID && current.runtime != nil &&
-		!current.runtime.client.Exited() && current.rolloutPercent == rollout &&
+		!current.runtime.client.Exited() && reflectRolloutsEqual(current.rollouts, bindingRollouts(enabled.Bindings)) &&
 		current.runtime.installation.BinarySHA256 == enabled.BinarySHA256 &&
 		current.runtime.installation.ConfigEncrypted == enabled.ConfigEncrypted {
 		healthCtx, cancel := context.WithTimeout(ctx, pluginHealthTimeout)
@@ -328,19 +332,19 @@ func (m *PluginManager) reconcileOnce(ctx context.Context) error {
 	}
 	if enabled.State == PluginStateStarting && !m.startingStateExpired(enabled) {
 		if current == nil {
-			m.route.Store(&pluginRoute{pluginID: enabled.ID, rolloutPercent: rollout, unavailable: "插件正在其他实例中启动"})
+			m.route.Store(&pluginRoute{pluginID: enabled.ID, rollouts: bindingRollouts(enabled.Bindings), unavailable: "插件正在其他实例中启动"})
 		}
 		return nil
 	}
 
 	local, err := m.ensureLocalInstallation(ctx, enabled)
 	if err != nil {
-		m.publishUnavailableRoute(enabled.ID, rollout, err.Error())
+		m.publishUnavailableRoute(enabled.ID, rollouts, err.Error())
 		return err
 	}
 	runtime, err := m.prepareRuntime(ctx, local, true)
 	if err != nil {
-		m.publishUnavailableRoute(enabled.ID, rollout, err.Error())
+		m.publishUnavailableRoute(enabled.ID, rollouts, err.Error())
 		return err
 	}
 
@@ -350,8 +354,8 @@ func (m *PluginManager) reconcileOnce(ctx context.Context) error {
 		runtime.kill()
 		return err
 	}
-	if !hasEnabledOpenAIBinding(latest.Bindings) || latest.BinarySHA256 != enabled.BinarySHA256 ||
-		latest.ConfigEncrypted != enabled.ConfigEncrypted || bindingRollout(latest.Bindings) != rollout {
+	if !hasEnabledPluginBinding(latest.Bindings) || latest.BinarySHA256 != enabled.BinarySHA256 ||
+		latest.ConfigEncrypted != enabled.ConfigEncrypted || !reflectRolloutsEqual(bindingRollouts(latest.Bindings), rollouts) {
 		runtime.kill()
 		return nil
 	}
@@ -379,7 +383,7 @@ func (m *PluginManager) reconcileOnce(ctx context.Context) error {
 		}
 	}
 	m.runtimes[enabled.ID] = runtime
-	m.route.Store(&pluginRoute{pluginID: enabled.ID, runtime: runtime, rolloutPercent: rollout})
+	m.route.Store(&pluginRoute{pluginID: enabled.ID, runtime: runtime, rollouts: bindingRollouts(enabled.Bindings)})
 	m.mu.Unlock()
 	for _, candidate := range stale {
 		candidate.drain(10 * time.Second)
@@ -415,7 +419,7 @@ func (m *PluginManager) detachAllRuntimes() []*pluginRuntime {
 	return runtimes
 }
 
-func (m *PluginManager) publishUnavailableRoute(pluginID int64, rollout int, message string) {
+func (m *PluginManager) publishUnavailableRoute(pluginID int64, rollouts map[string]int, message string) {
 	m.mu.Lock()
 	stale := make([]*pluginRuntime, 0, len(m.runtimes))
 	for id, runtime := range m.runtimes {
@@ -423,7 +427,7 @@ func (m *PluginManager) publishUnavailableRoute(pluginID int64, rollout int, mes
 		stale = append(stale, runtime)
 		delete(m.runtimes, id)
 	}
-	m.route.Store(&pluginRoute{pluginID: pluginID, rolloutPercent: rollout, unavailable: message})
+	m.route.Store(&pluginRoute{pluginID: pluginID, rollouts: rollouts, unavailable: message})
 	m.mu.Unlock()
 	for _, runtime := range stale {
 		runtime.drain(10 * time.Second)
@@ -567,7 +571,7 @@ func (m *PluginManager) Enable(ctx context.Context, id int64, acceptUntested boo
 	if active := m.route.Load(); active != nil && active.pluginID != id {
 		return nil, errors.New("OpenAI OAuth 出站能力已有启用插件，请先停用当前插件")
 	}
-	if installation.State == PluginStateEnabled && hasEnabledOpenAIBinding(installation.Bindings) {
+	if installation.State == PluginStateEnabled && hasEnabledPluginBinding(installation.Bindings) {
 		installation.Compatibility = EvaluatePluginCompatibility(installation.Manifest, m.hostInfo)
 		m.mu.Lock()
 		runtime := m.runtimes[id]
@@ -602,8 +606,8 @@ func (m *PluginManager) Enable(ctx context.Context, id int64, acceptUntested boo
 		stateCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		stateErr := m.repo.UpdateState(stateCtx, id, PluginStateError, err.Error(), nil, installation.BinarySHA256, PluginStateStarting)
 		cancel()
-		if hasEnabledOpenAIBinding(originalBindings) {
-			m.route.Store(&pluginRoute{pluginID: id, rolloutPercent: bindingRollout(originalBindings), unavailable: err.Error()})
+		if hasEnabledPluginBinding(originalBindings) {
+			m.route.Store(&pluginRoute{pluginID: id, rollouts: bindingRollouts(originalBindings), unavailable: err.Error()})
 		}
 		return nil, errors.Join(err, stateErr)
 	}
@@ -664,7 +668,7 @@ func (m *PluginManager) Delete(ctx context.Context, id int64) error {
 		m.mu.Unlock()
 		return err
 	}
-	if installation.State == PluginStateEnabled || hasEnabledOpenAIBinding(installation.Bindings) {
+	if installation.State == PluginStateEnabled || hasEnabledPluginBinding(installation.Bindings) {
 		m.mu.Unlock()
 		return errors.New("请先停用插件，再执行卸载")
 	}
@@ -945,7 +949,7 @@ func (m *PluginManager) ReadUIAsset(ctx context.Context, id int64, relative stri
 }
 
 func (m *PluginManager) RoundTripOpenAIOAuth(ctx context.Context, request *http.Request, proxyURL string, account *Account) (*http.Response, bool, error) {
-	if !m.ShouldRouteOpenAIOAuth(account) {
+	if !m.shouldRouteCapability(PluginCapabilityOpenAIOAuthOutbound, account) {
 		return nil, false, nil
 	}
 	route := m.route.Load()
@@ -955,7 +959,7 @@ func (m *PluginManager) RoundTripOpenAIOAuth(ctx context.Context, request *http.
 	if route.runtime == nil {
 		return nil, true, fmt.Errorf("OpenAI OAuth 插件不可用: %s", route.unavailable)
 	}
-	if route.runtime.client.Exited() {
+	if route.runtime.client != nil && route.runtime.client.Exited() {
 		runtimeErr := errors.New("OpenAI OAuth 插件进程已退出")
 		if stateErr := m.markRuntimeUnavailable(route, runtimeErr.Error()); stateErr != nil {
 			return nil, true, errors.Join(runtimeErr, stateErr)
@@ -968,7 +972,7 @@ func (m *PluginManager) RoundTripOpenAIOAuth(ctx context.Context, request *http.
 	response, err := route.runtime.roundTrip(ctx, request, proxyURL, account)
 	if err != nil {
 		route.runtime.finishRequest()
-		if route.runtime.client.Exited() {
+		if route.runtime.client != nil && route.runtime.client.Exited() {
 			if stateErr := m.markRuntimeUnavailable(route, err.Error()); stateErr != nil {
 				err = errors.Join(err, stateErr)
 			}
@@ -978,14 +982,50 @@ func (m *PluginManager) RoundTripOpenAIOAuth(ctx context.Context, request *http.
 	return response, true, nil
 }
 
+func (m *PluginManager) PatchAnthropicOAuth(ctx context.Context, request *http.Request, account *Account, endpoint string) error {
+	if !m.shouldRouteCapability(PluginCapabilityAnthropicOAuthPatch, account) {
+		return nil
+	}
+	route := m.route.Load()
+	if route == nil {
+		return errors.New("Anthropic OAuth 请求补丁插件不可用")
+	}
+	if route.runtime == nil {
+		return fmt.Errorf("Anthropic OAuth 请求补丁插件不可用: %s", route.unavailable)
+	}
+	if route.runtime.client != nil && route.runtime.client.Exited() {
+		return errors.New("Anthropic OAuth 请求补丁插件进程已退出")
+	}
+	if !route.runtime.beginRequest() {
+		return errors.New("Anthropic OAuth 请求补丁插件正在停止")
+	}
+	err := route.runtime.patch(ctx, request, account, endpoint)
+	route.runtime.finishRequest()
+	return err
+}
+
 // ShouldRouteOpenAIOAuth 判断该账号是否命中当前 OpenAI OAuth 插件绑定。
 // WebSocket 入口用它把命中的账号切换到 HTTP Bridge，避免绕过 v1 HTTP 插件协议。
 func (m *PluginManager) ShouldRouteOpenAIOAuth(account *Account) bool {
-	if m == nil || account == nil || account.Platform != PlatformOpenAI || account.Type != AccountTypeOAuth {
+	return m.shouldRouteCapability(PluginCapabilityOpenAIOAuthOutbound, account)
+}
+
+func (m *PluginManager) shouldRouteCapability(capability string, account *Account) bool {
+	if m == nil || account == nil {
+		return false
+	}
+	if capability == PluginCapabilityOpenAIOAuthOutbound && (account.Platform != PlatformOpenAI || account.Type != AccountTypeOAuth) {
+		return false
+	}
+	if capability == PluginCapabilityAnthropicOAuthPatch && (account.Platform != PlatformAnthropic || account.Type != AccountTypeOAuth) {
 		return false
 	}
 	route := m.route.Load()
-	return route != nil && route.rolloutPercent > 0 && int(stablePluginBucket(account.ID)) < route.rolloutPercent
+	if route == nil {
+		return false
+	}
+	rollout := routeRollout(route, capability)
+	return rollout > 0 && int(stablePluginBucket(account.ID)) < rollout
 }
 
 func (m *PluginManager) markRuntimeUnavailable(failedRoute *pluginRoute, message string) error {
@@ -1000,9 +1040,9 @@ func (m *PluginManager) markRuntimeUnavailable(failedRoute *pluginRoute, message
 	}
 	delete(m.runtimes, failedRoute.pluginID)
 	m.route.Store(&pluginRoute{
-		pluginID:       failedRoute.pluginID,
-		rolloutPercent: failedRoute.rolloutPercent,
-		unavailable:    message,
+		pluginID:    failedRoute.pluginID,
+		rollouts:    failedRoute.rollouts,
+		unavailable: message,
 	})
 	m.mu.Unlock()
 	return nil
@@ -1032,9 +1072,9 @@ func (m *PluginManager) publishRuntimeLocked(installation *PluginInstallation, r
 	}
 	m.runtimes[installation.ID] = runtime
 	m.route.Store(&pluginRoute{
-		pluginID:       installation.ID,
-		runtime:        runtime,
-		rolloutPercent: bindingRollout(installation.Bindings),
+		pluginID: installation.ID,
+		runtime:  runtime,
+		rollouts: bindingRollouts(installation.Bindings),
 	})
 }
 
@@ -1079,6 +1119,7 @@ func (m *PluginManager) buildHostServices(installation *PluginInstallation) plug
 // platform/account_type 来扩大它。
 var pluginCapabilityAccountScopeGrants = map[string]pluginAccountScopeEntry{
 	PluginCapabilityOpenAIOAuthOutbound: {Platform: PlatformOpenAI, AccountType: AccountTypeOAuth},
+	PluginCapabilityAnthropicOAuthPatch: {Platform: PlatformAnthropic, AccountType: AccountTypeOAuth},
 }
 
 // pluginAccountScopeFromManifest 从（安装期已校验的）清单声明能力推导出账号可见范围
@@ -1137,14 +1178,45 @@ func (m *PluginManager) removeManagedPath(target string) error {
 	return os.RemoveAll(absTarget)
 }
 
-func hasEnabledOpenAIBinding(bindings []PluginBinding) bool {
+func hasEnabledPluginBinding(bindings []PluginBinding) bool {
 	for _, binding := range bindings {
-		if binding.Enabled && binding.Capability == PluginCapabilityOpenAIOAuthOutbound &&
-			binding.Platform == PlatformOpenAI && binding.AccountType == AccountTypeOAuth {
+		if binding.Enabled && (binding.Capability == PluginCapabilityOpenAIOAuthOutbound || binding.Capability == PluginCapabilityAnthropicOAuthPatch) {
 			return true
 		}
 	}
 	return false
+}
+
+func bindingRollouts(bindings []PluginBinding) map[string]int {
+	result := make(map[string]int, 2)
+	for _, binding := range bindings {
+		if binding.Capability == PluginCapabilityOpenAIOAuthOutbound || binding.Capability == PluginCapabilityAnthropicOAuthPatch {
+			result[binding.Capability] = binding.RolloutPercent
+		}
+	}
+	return result
+}
+
+func reflectRolloutsEqual(left, right map[string]int) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, value := range right {
+		if left[key] != value {
+			return false
+		}
+	}
+	return true
+}
+
+func routeRollout(route *pluginRoute, capability string) int {
+	if route == nil {
+		return 0
+	}
+	if len(route.rollouts) == 0 && capability == PluginCapabilityOpenAIOAuthOutbound {
+		return route.rolloutPercent
+	}
+	return route.rollouts[capability]
 }
 
 func bindingRollout(bindings []PluginBinding) int {

@@ -16,6 +16,7 @@ import (
 
 const (
 	PluginCapabilityOpenAIOAuthOutbound = "openai.oauth.outbound_transport.v1"
+	PluginCapabilityAnthropicOAuthPatch = "anthropic.oauth.request_patch.v1"
 	PluginStateDisabled                 = "disabled"
 	PluginStateStarting                 = "starting"
 	PluginStateEnabled                  = "enabled"
@@ -169,8 +170,10 @@ func (m PluginManifest) Validate() error {
 		return errors.New("插件必须声明至少一个能力")
 	}
 	for _, capability := range m.Capabilities {
-		if capability.ID != PluginCapabilityOpenAIOAuthOutbound || capability.Platform != PlatformOpenAI || capability.AccountType != AccountTypeOAuth {
-			return fmt.Errorf("初期仅支持能力 %s", PluginCapabilityOpenAIOAuthOutbound)
+		valid := capability.ID == PluginCapabilityOpenAIOAuthOutbound && capability.Platform == PlatformOpenAI && capability.AccountType == AccountTypeOAuth
+		valid = valid || capability.ID == PluginCapabilityAnthropicOAuthPatch && capability.Platform == PlatformAnthropic && capability.AccountType == AccountTypeOAuth
+		if !valid {
+			return fmt.Errorf("不支持插件能力 %s", capability.ID)
 		}
 	}
 	runtimeEntry, ok := m.Runtimes[m.RuntimeKey()]
