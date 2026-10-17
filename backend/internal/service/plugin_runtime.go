@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -24,6 +25,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+const pluginPatchMaxBodyBytes = 16 << 20
 
 type pluginRuntime struct {
 	installation *PluginInstallation
@@ -352,6 +355,85 @@ func (r *pluginRuntime) roundTrip(ctx context.Context, request *http.Request, pr
 		ContentLength: start.ContentLength,
 		Request:       request,
 	}, nil
+}
+
+func (r *pluginRuntime) patch(ctx context.Context, request *http.Request, account *Account, endpoint string) error {
+	if request == nil || request.URL == nil || account == nil {
+		return errors.New("插件补丁请求参数不完整")
+	}
+	if request.Body == nil {
+		request.Body = http.NoBody
+	}
+	body, err := io.ReadAll(io.LimitReader(request.Body, pluginPatchMaxBodyBytes+1))
+	if err != nil {
+		return fmt.Errorf("读取插件补丁请求体: %w", err)
+	}
+	if len(body) > pluginPatchMaxBodyBytes {
+		return errors.New("插件补丁请求体超过大小限制")
+	}
+	request.Body = io.NopCloser(bytes.NewReader(body))
+	callCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	resp, err := r.api.Patch(callCtx, &pluginv1.PatchRequest{
+		RequestId: strconv.FormatInt(time.Now().UnixNano(), 36), Method: request.Method,
+		Url: request.URL.String(), Host: request.Host, Headers: safePatchHeaders(request.Header), Body: body,
+		AccountId: account.ID, Platform: account.Platform, AccountType: account.Type, Endpoint: endpoint,
+	})
+	if err != nil {
+		if status.Code(err) == codes.Unimplemented {
+			return nil
+		}
+		return fmt.Errorf("插件补丁 RPC 失败: %w", err)
+	}
+	if resp == nil || !resp.Applied {
+		return nil
+	}
+	if len(resp.Body) > pluginPatchMaxBodyBytes {
+		return errors.New("插件补丁结果超过大小限制")
+	}
+	if resp.ErrorCode != "" || resp.ErrorMessage != "" {
+		return fmt.Errorf("插件补丁无效 [%s]: %s", resp.ErrorCode, resp.ErrorMessage)
+	}
+	if resp.Body == nil {
+		return errors.New("插件补丁结果缺少请求体")
+	}
+	for key, values := range resp.Headers {
+		canonical := http.CanonicalHeaderKey(key)
+		if !allowedPatchHeader(canonical) {
+			return fmt.Errorf("插件补丁禁止修改请求头 %q", key)
+		}
+		if values == nil {
+			return fmt.Errorf("插件补丁请求头 %q 无效", key)
+		}
+		request.Header.Del(canonical)
+		for _, value := range values.Values {
+			request.Header.Add(canonical, value)
+		}
+	}
+	request.Body = io.NopCloser(bytes.NewReader(resp.Body))
+	request.ContentLength = int64(len(resp.Body))
+	request.Header.Set("Content-Length", strconv.Itoa(len(resp.Body)))
+	return nil
+}
+
+func safePatchHeaders(headers http.Header) map[string]*pluginv1.HeaderValues {
+	result := make(map[string]*pluginv1.HeaderValues)
+	for key, values := range headers {
+		canonical := http.CanonicalHeaderKey(key)
+		if canonical == "Authorization" || canonical == "X-Api-Key" || canonical == "Proxy-Authorization" || canonical == "Content-Length" || canonical == "Host" {
+			continue
+		}
+		result[canonical] = &pluginv1.HeaderValues{Values: append([]string(nil), values...)}
+	}
+	return result
+}
+
+func allowedPatchHeader(key string) bool {
+	switch key {
+	case "Anthropic-Beta", "Anthropic-Version", "Content-Type", "Accept", "User-Agent":
+		return true
+	}
+	return false
 }
 
 type PluginTransportError struct {

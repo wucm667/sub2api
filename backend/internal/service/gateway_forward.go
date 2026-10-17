@@ -395,6 +395,9 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		if err != nil {
 			return nil, err
 		}
+		if err := s.applyAnthropicOAuthRequestPatch(ctx, upstreamReq, account, "messages"); err != nil {
+			return nil, err
+		}
 		// 记录本次实际发送的 wire body；只有请求成功后才写回 ParsedRequest，避免 400 retry 基于已签名 CCH 再改写。
 		lastWireBody = wireBody
 

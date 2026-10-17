@@ -29,14 +29,10 @@
       "type": "array",
       "minItems": 1,
       "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["id", "platform", "account_type"],
-        "properties": {
-          "id": { "const": "openai.oauth.outbound_transport.v1" },
-          "platform": { "const": "openai" },
-          "account_type": { "const": "oauth" }
-        }
+        "oneOf": [
+          { "type": "object", "additionalProperties": false, "required": ["id", "platform", "account_type"], "properties": { "id": { "const": "openai.oauth.outbound_transport.v1" }, "platform": { "const": "openai" }, "account_type": { "const": "oauth" } } },
+          { "type": "object", "additionalProperties": false, "required": ["id", "platform", "account_type"], "properties": { "id": { "const": "anthropic.oauth.request_patch.v1" }, "platform": { "const": "anthropic" }, "account_type": { "const": "oauth" } } }
+        ]
       }
     },
     "runtimes": {

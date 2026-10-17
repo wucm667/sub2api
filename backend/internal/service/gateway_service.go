@@ -768,6 +768,7 @@ func (s *GatewayService) TempUnscheduleRetryableError(ctx context.Context, accou
 
 // GatewayService handles API gateway operations
 type GatewayService struct {
+	pluginManager         *PluginManager
 	accountRepo           AccountRepository
 	groupRepo             GroupRepository
 	usageLogRepo          UsageLogRepository
@@ -807,8 +808,44 @@ type GatewayService struct {
 	userPlatformQuotaRepo UserPlatformQuotaRepository
 }
 
+func (s *GatewayService) SetPluginManager(manager *PluginManager) { s.pluginManager = manager }
+
 // NewGatewayService creates a new GatewayService
 func NewGatewayService(
+	accountRepo AccountRepository,
+	groupRepo GroupRepository,
+	usageLogRepo UsageLogRepository,
+	usageBillingRepo UsageBillingRepository,
+	userRepo UserRepository,
+	userSubRepo UserSubscriptionRepository,
+	userGroupRateRepo UserGroupRateRepository,
+	cache GatewayCache,
+	cfg *config.Config,
+	schedulerSnapshot *SchedulerSnapshotService,
+	concurrencyService *ConcurrencyService,
+	billingService *BillingService,
+	rateLimitService *RateLimitService,
+	billingCacheService *BillingCacheService,
+	identityService *IdentityService,
+	httpUpstream HTTPUpstream,
+	deferredService *DeferredService,
+	claudeTokenProvider *ClaudeTokenProvider,
+	sessionLimitCache SessionLimitCache,
+	rpmCache RPMCache,
+	digestStore *DigestSessionStore,
+	settingService *SettingService,
+	tlsFPProfileService *TLSFingerprintProfileService,
+	channelService *ChannelService,
+	resolver *ModelPricingResolver,
+	compositeResolver *CompositeRouteResolver,
+	balanceNotifyService *BalanceNotifyService,
+	userPlatformQuotaRepo UserPlatformQuotaRepository,
+) *GatewayService {
+	return newGatewayService(nil, accountRepo, groupRepo, usageLogRepo, usageBillingRepo, userRepo, userSubRepo, userGroupRateRepo, cache, cfg, schedulerSnapshot, concurrencyService, billingService, rateLimitService, billingCacheService, identityService, httpUpstream, deferredService, claudeTokenProvider, sessionLimitCache, rpmCache, digestStore, settingService, tlsFPProfileService, channelService, resolver, compositeResolver, balanceNotifyService, userPlatformQuotaRepo)
+}
+
+func newGatewayService(
+	pluginManager *PluginManager,
 	accountRepo AccountRepository,
 	groupRepo GroupRepository,
 	usageLogRepo UsageLogRepository,
@@ -842,6 +879,7 @@ func NewGatewayService(
 	modelsListTTL := resolveModelsListCacheTTL(cfg)
 
 	svc := &GatewayService{
+		pluginManager:         pluginManager,
 		accountRepo:           accountRepo,
 		groupRepo:             groupRepo,
 		usageLogRepo:          usageLogRepo,

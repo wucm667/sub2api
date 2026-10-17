@@ -11,6 +11,10 @@ service TransportPlugin {
   rpc ApplyConfig(ApplyConfigRequest) returns (ApplyConfigResponse);
   rpc TestConfig(TestConfigRequest) returns (TestConfigResponse);
   rpc Forward(stream ForwardRequest) returns (stream ForwardResponse);
+  // Patch is an optional, host-owned request transformation hook. The host
+  // never sends credentials or proxy details and remains responsible for the
+  // actual upstream request and response.
+  rpc Patch(PatchRequest) returns (PatchResponse);
   // InitHostServices hands the plugin a go-plugin broker stream id it can dial
   // back to reach the host-provided HostService. It is an optional, generic
   // lifecycle hook: plugins built against an older contract leave it
@@ -148,6 +152,27 @@ message ForwardResponse {
     ForwardResponseEnd end = 3;
     ForwardResponseError error = 4;
   }
+}
+
+message PatchRequest {
+  string request_id = 1;
+  string method = 2;
+  string url = 3;
+  string host = 4;
+  map<string, HeaderValues> headers = 5;
+  bytes body = 6;
+  int64 account_id = 7;
+  string platform = 8;
+  string account_type = 9;
+  string endpoint = 10;
+}
+
+message PatchResponse {
+  bool applied = 1;
+  bytes body = 2;
+  map<string, HeaderValues> headers = 3;
+  string error_code = 4;
+  string error_message = 5;
 }
 
 message InitHostServicesRequest {

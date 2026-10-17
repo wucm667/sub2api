@@ -155,6 +155,10 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		s.countTokensError(c, http.StatusInternalServerError, "api_error", "Failed to build request")
 		return err
 	}
+	if err := s.applyAnthropicOAuthRequestPatch(ctx, upstreamReq, account, "count_tokens"); err != nil {
+		s.countTokensError(c, http.StatusBadGateway, "upstream_error", "Request patch failed")
+		return err
+	}
 	// 先记录首发 wire body；如果后面进入 400 retry，retry 会基于未签名的逻辑 body 重新构建。
 	acceptedWireBody := wireBody
 
@@ -193,6 +197,11 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 
 		filteredBody := FilterThinkingBlocksForRetry(body, reqModel)
 		retryReq, retryWireBody, buildErr := s.buildCountTokensRequest(ctx, c, account, filteredBody, token, tokenType, reqModel, shouldMimicClaudeCode)
+		if buildErr == nil {
+			if patchErr := s.applyAnthropicOAuthRequestPatch(ctx, retryReq, account, "count_tokens"); patchErr != nil {
+				buildErr = patchErr
+			}
+		}
 		if buildErr == nil {
 			retryResp, retryErr := s.httpUpstream.DoWithTLS(retryReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
 			if retryErr == nil {
